@@ -1,0 +1,9 @@
+# 本地唯一需要装的依赖 —— 全是"调云端 API 的 SDK"，没有 torch/vllm/verl 等
+# AI 运行时依赖（那些只会出现在 TKE 训练镜像里，见 TASK-SPEC.md 与 plan.md）。
+# 客户 clone 本仓库后，`pip install -r requirements.txt` 是唯一的本地安装步骤，
+# 几秒钟量级，然后就能执行 `python driver.py ...` 远程启动整条链路。
+
+tencentcloud-sdk-python>=3.0.1000   # AGS / TKE / COS 等腾讯云 API 客户端
+e2b-code-interpreter>=1.0.0          # 连接 AGS 沙箱实例（files/commands 接口）
+cos-python-sdk-v5>=1.9.30            # 上传/下载 tracing.jsonl 到 COS
+python-dotenv>=1.0.0                 # 读取 .env 里的云凭证

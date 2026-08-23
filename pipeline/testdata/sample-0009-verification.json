@@ -1,0 +1,52 @@
+{
+  "task_id": "swe-synth-0009",
+  "passed": true,
+  "reason": "双向验证通过：空解失败（题目有内容）、参考解通过（题目可解）",
+  "empty_sandbox_id": "ohmiiubknqpposcgznyt3mqsu4rwctqtgohauab4",
+  "golden_sandbox_id": "xj7kg7fi2sd2e4cqibslyfhuamlddxekbtywq22m",
+  "empty_run": {
+    "task_id": "swe-synth-0009",
+    "passed": false,
+    "fail_to_pass": {
+      "total": 7,
+      "passed": 0,
+      "failing": [
+        "tests/test_domain_utils_synth.py::test_is_valid_domain_idna",
+        "tests/test_domain_utils_synth.py::test_is_valid_domain_invalid",
+        "tests/test_domain_utils_synth.py::test_is_valid_domain_valid",
+        "tests/test_domain_utils_synth.py::test_normalize_domain_empty_and_dots",
+        "tests/test_domain_utils_synth.py::test_normalize_domain_idna",
+        "tests/test_domain_utils_synth.py::test_normalize_domain_invalid_unicode",
+        "tests/test_domain_utils_synth.py::test_normalize_domain_lowercase_no_trailing_dot"
+      ]
+    },
+    "pass_to_pass": {
+      "total": 0,
+      "passed": 0,
+      "failing": []
+    },
+    "collect_error": false,
+    "pytest_returncode": 1,
+    "n_collected": 8,
+    "raw_log_path": "/task/pytest_raw.log"
+  },
+  "golden_run": {
+    "task_id": "swe-synth-0009",
+    "passed": true,
+    "fail_to_pass": {
+      "total": 7,
+      "passed": 7,
+      "failing": []
+    },
+    "pass_to_pass": {
+      "total": 0,
+      "passed": 0,
+      "failing": []
+    },
+    "collect_error": false,
+    "pytest_returncode": 1,
+    "n_collected": 8,
+    "raw_log_path": "/task/pytest_raw.log"
+  },
+  "duration_sec": 26.6
+}

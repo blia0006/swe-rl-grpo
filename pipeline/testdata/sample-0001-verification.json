@@ -1,0 +1,51 @@
+{
+  "task_id": "swe-synth-0001",
+  "passed": true,
+  "reason": "双向验证通过：空解失败（题目有内容）、参考解通过（题目可解）",
+  "empty_sandbox_id": "tes54e3r4zvar5zxmsp6e24mrepqumhryzy5m74y",
+  "golden_sandbox_id": "ixn2gb3v3zm2fwfpy4rykhievysyvh2owxhfkwzw",
+  "empty_run": {
+    "task_id": "swe-synth-0001",
+    "passed": false,
+    "fail_to_pass": {
+      "total": 6,
+      "passed": 0,
+      "failing": [
+        "tests/test_retry_history_synth.py::test_idle_time_accumulation",
+        "tests/test_retry_history_synth.py::test_initially_empty",
+        "tests/test_retry_history_synth.py::test_mean_idle_time_empty",
+        "tests/test_retry_history_synth.py::test_mixed_records_and_success_rate",
+        "tests/test_retry_history_synth.py::test_record_failure_increments",
+        "tests/test_retry_history_synth.py::test_record_success_increments"
+      ]
+    },
+    "pass_to_pass": {
+      "total": 0,
+      "passed": 0,
+      "failing": []
+    },
+    "collect_error": false,
+    "pytest_returncode": 1,
+    "n_collected": 6,
+    "raw_log_path": "/task/pytest_raw.log"
+  },
+  "golden_run": {
+    "task_id": "swe-synth-0001",
+    "passed": true,
+    "fail_to_pass": {
+      "total": 6,
+      "passed": 6,
+      "failing": []
+    },
+    "pass_to_pass": {
+      "total": 0,
+      "passed": 0,
+      "failing": []
+    },
+    "collect_error": false,
+    "pytest_returncode": 0,
+    "n_collected": 6,
+    "raw_log_path": "/task/pytest_raw.log"
+  },
+  "duration_sec": 31.5
+}
