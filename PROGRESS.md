@@ -352,4 +352,40 @@ demo 服务本身不稳定），与沙箱网络能力无关。换成 `api.github
 
 ---
 
+## 2026-08-23 · 项目独立化改造 · 与课题三代码解耦，初始化独立 Git 仓库
+
+**背景：** 用户明确要求「课题四必须重新做一个，不基于课题三继续，需要重新创建一个独立的
+GitHub 项目去推送」。经确认边界（`plan.md`/`TASK-SPEC.md` 描述以外的口头约定）：
+- **题目/SWE 环境层**：只要代码仓库和流程独立即可，镜像仍可继续引用课题三已推送到
+  TCR 的现成镜像、`tasks.jsonl` 题目数据（工作量最小，且课题三镜像已过真实沙箱集成测试）
+- **云资源/凭证层**：TKE 集群、COS bucket 等基础设施属于账号预留资源，与课题三代码无关，
+  继续共用；但 `.env` 凭证配置文件本身要在题目四目录下独立一份，不再 fallback 读取课题三路径
+- **代码仓库层**：本地 `git init` 独立仓库，先梳理 `.gitignore`，远程仓库地址确定后再 push
+
+**已完成的解耦改动：**
+1. `.env` 头部注释残留的"课题三：数据合成"标题改为"题目四：强化学习"，并明确写明
+   本文件独立、不 fallback 读取其他课题目录
+2. `scripts/probe_cloud.py`：去掉 `SIBLING_ENV`（`../课题三-数据合成/.env`）回退逻辑，
+   `load_env()` 只读本项目 `.env`；对应的报错提示文案同步更新
+3. `experiments/probe_sandbox_outbound.py`：`_load_env()` 由硬编码读取课题三 `.env` 绝对路径，
+   改为读 `Path(__file__).resolve().parent.parent / ".env"`（本项目目录）
+4. `pipeline/reward.py`：自测入口（`__main__`）依赖的真实判分样本 `verification.json`，
+   从课题三 `data/proofs/*/verification.json` 挑 3 个代表性样本（swe-synth-0001/0009/0019）
+   vendored 到本仓库 `pipeline/testdata/`，默认 glob pattern 改为读本地 `testdata/`目录，
+   使自测脚本不再依赖课题三外部目录是否存在。已重新跑通：3 题全部 `empty=0.0 golden=1.0` 通过
+5. 新建 `.gitignore`（忽略 `.env`、`__pycache__/`、`*.pyc`、`.venv/`、训练产物等），
+   本地 `git init` 并完成首次 commit（`main` 分支，root commit，20 个文件，不含任何 `.env`
+   或 `__pycache__`，已核实 `git status` 干净）
+
+**未变更（按约定保留对课题三的引用，属于"基础设施/资源"而非"代码继承"）：**
+- `plan.md` / `TASK-SPEC.md` / `PROGRESS.md` 里说明性文字中提到"复用课题三已构建的题目镜像/
+  `tasks.jsonl`/沙箱工具"的部分——这些是数据和基础设施层面的复用，用户已确认可以保留
+- `clients/ags.py` 本身已是独立 vendored 副本（此前从课题三 `swe_synth/clients/ags.py`
+  精简复制而来，文件内容自包含，不存在运行期 import 课题三路径的情况）
+
+**下一步：** 等待用户提供远程 GitHub 仓库地址后执行 `git remote add origin <url> && git push`。
+在此之前，继续按 `plan.md` 既定的 Phase 1（VERL 接口核实 / 沙箱集成测试）推进。
+
+---
+
 <!-- 后续阶段的记录请追加在下面 -->
