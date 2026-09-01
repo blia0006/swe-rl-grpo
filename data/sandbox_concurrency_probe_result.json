@@ -1,0 +1,61 @@
+{
+  "n_concurrent": 3,
+  "n_ok": 3,
+  "total_wall_sec": 14.18,
+  "cold_start_sec": [
+    11.14,
+    11.14,
+    11.2
+  ],
+  "warm_cycle_sec": [
+    1.51,
+    1.26,
+    1.62
+  ],
+  "restore_cycle_sec": [
+    0.37,
+    0.72,
+    0.41
+  ],
+  "results": [
+    {
+      "task_id": "swe-synth-0001",
+      "cold_start_sec": 11.14,
+      "instance_id": "ulpwa4mq7xwv3tzoy4vohyp5sgytningd625zbhs",
+      "snapshot_exit": 0,
+      "apply_exit": 0,
+      "verify_exit": 0,
+      "warm_cycle_sec": 1.51,
+      "passed_after_golden": true,
+      "restore_exit": 0,
+      "restore_cycle_sec": 0.37,
+      "passed_after_restore_empty": false
+    },
+    {
+      "task_id": "swe-synth-0003",
+      "cold_start_sec": 11.14,
+      "instance_id": "bokrr7bqlbf2f22lrgfyheu23uwsf3cserut6b5k",
+      "snapshot_exit": 0,
+      "apply_exit": 0,
+      "verify_exit": 0,
+      "warm_cycle_sec": 1.26,
+      "passed_after_golden": true,
+      "restore_exit": 0,
+      "restore_cycle_sec": 0.72,
+      "passed_after_restore_empty": false
+    },
+    {
+      "task_id": "swe-synth-0002",
+      "cold_start_sec": 11.2,
+      "instance_id": "ee7qyi6276u7posd2pgejzdrv7lx6o37wvczoqbd",
+      "snapshot_exit": 0,
+      "apply_exit": 0,
+      "verify_exit": 0,
+      "warm_cycle_sec": 1.62,
+      "passed_after_golden": true,
+      "restore_exit": 0,
+      "restore_cycle_sec": 0.41,
+      "passed_after_restore_empty": false
+    }
+  ]
+}

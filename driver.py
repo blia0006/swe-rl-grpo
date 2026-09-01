@@ -188,7 +188,13 @@ def run_one_task(
         "TASK_DIR": task_dir,
     }
 
-    result = sbx.commands.run("python3 /root/agent.py", user="root", timeout=900, envs=env)
+    # 题目镜像里裸 "python3" 不在 PATH 里（登录 shell 也一样，实测确认），
+    # 真正的解释器在题目仓库自带的 venv `/opt/venv311/bin/python3`
+    # （镜像统一约定，`verify.sh` 内部也是引用这个路径，见课题三 Dockerfile 契约）。
+    # agent.py 本身只用标准库，用这个 venv 的 python3 跑没有兼容性问题。
+    result = sbx.commands.run(
+        "/opt/venv311/bin/python3 /root/agent.py", user="root", timeout=900, envs=env,
+    )
 
     tracing_path = f"{task_dir.rstrip('/')}/tracing.jsonl"
     try:

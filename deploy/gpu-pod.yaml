@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: swe-rl-gpu
+  labels:
+    app: swe-rl-gpu
+spec:
+  restartPolicy: Never
+  containers:
+    - name: main
+      # 【5090 适配】GPU 已从 P4/V100 切换到 RTX 5090（Blackwell, sm_120）。
+      # 旧镜像 app-verl0.4-vllm0.8.5（CUDA 12.1 + torch 2.4/2.5）在 sm_120 上会报
+      # "no kernel image is available for execution on the device"，必须换 cu128 镜像。
+      # verl 从 v0.6.0 起基于 vllm/sglang 发布，vllm011.latest 对应
+      # verl0.6-cu128-torch2.8.0-fa2.7.4，CUDA 12.8 + torch 2.8 已覆盖 sm_120 要求。
+      # ⚠️ 训练侧仍可先用 HFRollout（不依赖 vLLM 引擎），只要 torch 支持 sm_120 即可；
+      #    若后续要切 vLLM 引擎，需节点起来后实测 vLLM 预编译 kernel 是否含 sm_120。
+      image: verlai/verl:vllm011.latest
+      command: ["sleep", "infinity"]
+      envFrom:
+        - secretRef:
+            name: cloud-creds
+      env:
+        - name: E2B_VALIDATE_API_KEY
+          value: "false"
+        - name: AGS_REWARD_TOOL_NAME
+          value: "swe-synth-shared-runner"
+        - name: HF_HOME
+          value: "/workspace/hf_cache"
+      resources:
+        requests:
+          nvidia.com/gpu: 1
+          cpu: "3"
+          memory: "16Gi"
+        limits:
+          nvidia.com/gpu: 1
+          cpu: "4"
+          memory: "19Gi"
+      volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+  volumes:
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 4Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: swe-rl-llm
+spec:
+  type: LoadBalancer
+  selector:
+    app: swe-rl-gpu
+  ports:
+    - name: llm
+      port: 8000
+      targetPort: 8000

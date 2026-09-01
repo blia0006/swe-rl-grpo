@@ -7,3 +7,6 @@ tencentcloud-sdk-python>=3.0.1000   # AGS / TKE / COS 等腾讯云 API 客户端
 e2b-code-interpreter>=1.0.0          # 连接 AGS 沙箱实例（files/commands 接口）
 cos-python-sdk-v5>=1.9.30            # 上传/下载 tracing.jsonl 到 COS
 python-dotenv>=1.0.0                 # 读取 .env 里的云凭证
+modelscope>=1.9.0                    # 国内直连预取模型权重（一次性用，见 experiments/upload_model_to_cos.py）
+pandas>=2.0.0                        # 构建 VERL 训练用 parquet（pipeline/build_grpo_dataset.py）
+pyarrow>=14.0.0                      # pandas 写 parquet 的引擎

@@ -31,9 +31,13 @@ VERL 的 `RewardManager.__call__` 会对 batch 里每条样本调用一次本函
   1. 从 `ground_truth`（JSON 字符串）里取出题目信息（task_id、镜像地址）
   2. 从 `solution_str` 里抽取模型生成的 unified diff patch
   3. 找一个该题目的沙箱实例（实例池，见 `_InstancePool`）：
-     - 有空闲实例 → 复用：`git checkout -- . && git clean -fd` 还原到干净态
-     - 没有 → 起一个新实例（`AGSClient.start_instance`，image_override=题目镜像）
-  4. `git apply` 应用 patch → 跑 `verify.sh` → 读 `result.json`
+     - 有空闲实例 → 复用：用 tar 快照还原到干净题目态（镜像内 `/workspace/repo`
+       **不含 `.git`**，经 Phase 1.5 真实沙箱实测确认，`git checkout`/`git clean`
+       不可行，改用 `tar czf` 首次建快照 + `tar xzf` 还原，实测仅 ~0.3s/~0.05s）
+     - 没有 → 起一个新实例（`AGSClient.start_instance`，image_override=题目镜像），
+       首次使用时先建一次 pristine 快照
+  4. `git apply` 应用 patch（镜像内仓库虽无 `.git` 历史，但 `git apply` 本身只按
+     文件路径打 patch，不依赖 `.git`，经实测可用）→ 跑 `verify.sh` → 读 `result.json`
   5. 用 `pipeline/reward.py::compute_reward` 统一judge口径算分（与线 A 同一套逻辑，
      避免两条线判分不一致）
   6. 用完的实例放回池子（不 kill），供下一个 sample 复用——这是 plan.md 2.2 节
@@ -66,9 +70,11 @@ os.environ.setdefault("E2B_VALIDATE_API_KEY", "false")
 from pipeline.reward import compute_reward  # noqa: E402
 
 DATA_SOURCE_NAME = "swe_rl"
-DEFAULT_TOOL_NAME = os.environ.get("AGS_REWARD_TOOL_NAME", "swe-rl-runner")
+DEFAULT_TOOL_NAME = os.environ.get("AGS_REWARD_TOOL_NAME", "swe-synth-shared-runner")
 VERIFY_TIMEOUT_SEC = int(os.environ.get("REWARD_VERIFY_TIMEOUT_SEC", "300"))
 INSTANCE_START_TIMEOUT = os.environ.get("REWARD_INSTANCE_TIMEOUT", "15m")
+REPO_DIR = "/workspace/repo"
+PRISTINE_SNAPSHOT = "/tmp/pristine.tar.gz"
 
 
 # ---------------------------------------------------------------- patch 抽取
@@ -168,8 +174,62 @@ _POOL = _InstancePool()
 
 # ---------------------------------------------------------------- 单次打分
 
-def _score_via_sandbox(task_id: str, image: str, patch: str) -> tuple[float, str]:
-    """借实例 → 还原干净态 → apply patch → verify.sh → 判分 → 还实例。返回 (reward, reason)。"""
+def _repo_content_matches(sbx, expected_repo: str) -> bool:
+    """校验沙箱内 `/workspace/repo` 的实际内容是否与期望的 repo 匹配。
+
+    背景（重要，勿删）：2026-08-30 训练实测发现，AGS 共享沙箱工具在反复用
+    `image_override` 切换镜像时，曾出现「实际拉起的容器内容与请求的镜像不符」
+    的情况（`swe-synth-0001~0006` 六道题镶像被稳定复现地判成了别的题目的仓库
+    内容；删除重建共享工具后仍有 5/6 未恢复，判定为镜像构建阶段的数据缺陷，
+    而非单纯的实例缓存问题——但两种成因都可能在未来再次出现，因此在这里加
+    一层运行时兜底校验，防止 reward 被静默算错而不自知）。
+    校验方式：读 `pyproject.toml` 的 `name = "..."` 字段，看是否包含期望 repo
+    的项目名（大小写不敏感）。读不到就退化为无法判断，返回 True（不误杀）。
+    """
+    expect = expected_repo.split("/")[-1].lower()
+    try:
+        r = sbx.commands.run(
+            f"grep -m1 '^name' {REPO_DIR}/pyproject.toml 2>/dev/null || true",
+            user="root", timeout=15,
+        )
+        pkgname = (r.stdout or "").strip().lower()
+    except Exception:  # noqa: BLE001
+        return True
+    if not pkgname:
+        return True
+    return expect in pkgname
+
+
+_CONTENT_MISMATCH_MAX_RETRY = int(os.environ.get("REWARD_CONTENT_MISMATCH_RETRY", "2"))
+
+
+def _score_via_sandbox(task_id: str, image: str, patch: str, expected_repo: str = "") -> tuple[float, str]:
+    """`_score_via_sandbox_once` 的重试包装：若命中"沙箱内容与期望 repo 不符"
+    （见 `_repo_content_matches`），说明借到的是一个坏实例，不是模型能力问题，
+    丢弃后换一个新实例重试，最多 `_CONTENT_MISMATCH_MAX_RETRY` 次，避免这类
+    基础设施问题被误判为模型输出差、静默污染训练信号。
+    """
+    last_reason = ""
+    for attempt in range(_CONTENT_MISMATCH_MAX_RETRY + 1):
+        reward, reason = _score_via_sandbox_once(task_id, image, patch, expected_repo)
+        if "沙箱内容校验失败" not in reason:
+            return reward, reason
+        last_reason = reason
+        if os.environ.get("REWARD_DEBUG_LOG"):
+            print(f"[reward_debug] 内容校验失败，第 {attempt + 1} 次重试：{reason}", flush=True)
+    return 0.0, f"{last_reason}（已重试 {_CONTENT_MISMATCH_MAX_RETRY} 次仍失败）"
+
+
+def _score_via_sandbox_once(task_id: str, image: str, patch: str, expected_repo: str = "") -> tuple[float, str]:
+    """借实例 → 还原干净态（tar 快照）→ apply patch → verify.sh → 判分 → 还实例。
+
+    返回 (reward, reason)。
+
+    还原方案说明：镜像内 `/workspace/repo` 不含 `.git`（Phase 1.5 真实沙箱实测确认），
+    因此不能用 `git checkout -- . && git clean -fd`。改用 tar 快照：
+      - 全新实例首次使用：`tar czf {PRISTINE_SNAPSHOT} -C / workspace/repo` 建一份快照
+      - 复用实例：`rm -rf {REPO_DIR} && tar xzf {PRISTINE_SNAPSHOT} -C /` 秒级还原
+    """
     from e2b_code_interpreter import Sandbox
 
     instance_id, reused = _POOL.acquire(task_id, image)
@@ -177,20 +237,35 @@ def _score_via_sandbox(task_id: str, image: str, patch: str) -> tuple[float, str
     try:
         sbx = Sandbox.connect(instance_id)
 
+        if expected_repo and not _repo_content_matches(sbx, expected_repo):
+            broken = True
+            return 0.0, (
+                f"沙箱内容校验失败：task_id={task_id} 期望 repo={expected_repo}，"
+                f"但实例内容不匹配（疑似镶像内容错乱，已丢弃该实例，不计入模型能力信号）"
+            )
+
         if reused:
-            reset = sbx.commands.run(
-                "cd /workspace/repo && git checkout -- . && git clean -fd",
+            restore = sbx.commands.run(
+                f"rm -rf {REPO_DIR} && tar xzf {PRISTINE_SNAPSHOT} -C /",
                 user="root", timeout=30,
             )
-            if reset.exit_code != 0:
+            if restore.exit_code != 0:
                 broken = True
-                return 0.0, f"实例还原失败（exit={reset.exit_code}），已丢弃该实例"
+                return 0.0, f"实例还原失败（exit={restore.exit_code}），已丢弃该实例"
+        else:
+            snapshot = sbx.commands.run(
+                f"tar czf {PRISTINE_SNAPSHOT} -C / workspace/repo",
+                user="root", timeout=30,
+            )
+            if snapshot.exit_code != 0:
+                broken = True
+                return 0.0, f"建立 pristine 快照失败（exit={snapshot.exit_code}），已丢弃该实例"
 
         if patch.strip():
             patch_content = patch if patch.endswith("\n") else patch + "\n"
             sbx.files.write("/tmp/reward.patch", patch_content, user="root")
             apply_res = sbx.commands.run(
-                "cd /workspace/repo && git apply --whitespace=nowarn /tmp/reward.patch",
+                f"cd {REPO_DIR} && git apply --whitespace=nowarn /tmp/reward.patch",
                 user="root", timeout=30,
             )
             if apply_res.exit_code != 0:
@@ -200,16 +275,23 @@ def _score_via_sandbox(task_id: str, image: str, patch: str) -> tuple[float, str
         else:
             return 0.0, "solution_str 中未抽取到有效 patch"
 
-        verify_res = sbx.commands.run(
-            "cd /workspace/repo && bash /task/verify.sh",
-            user="root", timeout=VERIFY_TIMEOUT_SEC,
-            envs={"PYTEST_ADDOPTS": "--color=no"},
-        )
+        try:
+            verify_res = sbx.commands.run(
+                f"cd {REPO_DIR} && bash /task/verify.sh",
+                user="root", timeout=VERIFY_TIMEOUT_SEC,
+                envs={"PYTEST_ADDOPTS": "--color=no"},
+            )
+        except Exception:
+            # verify.sh 判不通过时退出码非 0，SDK 默认对非 0 退出码抛异常
+            # （Phase 1.5 真实沙箱实测确认），这里吞掉异常继续读 result.json，
+            # 用文件内容而非退出码判断，退出码只用于日志。
+            pass
+
         try:
             result_raw = sbx.files.read("/task/result.json", user="root")
             result_json = json.loads(result_raw)
         except Exception as e:  # noqa: BLE001
-            return 0.0, f"读取/解析 result.json 失败：{e}（verify exit={verify_res.exit_code}）"
+            return 0.0, f"读取/解析 result.json 失败：{e}"
 
         rr = compute_reward(result_json)
         return rr.reward, rr.reason
@@ -251,6 +333,7 @@ def compute_score(
 
     task_id = meta.get("task_id", "unknown")
     image = meta.get("image")
+    expected_repo = meta.get("repo", "")
     if not image:
         return 0.0
 
@@ -262,10 +345,19 @@ def compute_score(
     if cached is not None:
         return cached[0]
 
-    reward, reason = _score_via_sandbox(task_id, image, patch)
+    reward, reason = _score_via_sandbox(task_id, image, patch, expected_repo)
 
     with _cache_lock:
         _reward_cache[key] = (reward, reason)
+
+    if os.environ.get("REWARD_DEBUG_LOG"):
+        print(
+            f"[reward_debug] task_id={task_id} reward={reward} reason={reason} "
+            f"solution_len={len(solution_str)} patch_len={len(patch)} "
+            f"patch_head={patch[:200]!r}",
+            flush=True,
+        )
+
     return reward
 
 

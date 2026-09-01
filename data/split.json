@@ -1,0 +1,17 @@
+{
+  "_comment": "【已修复】原 split.json 包含的 swe-synth-0001~0006 六道题所用镜像内容存在错乱（镜像内实际仓库代码与 tasks.jsonl 记录的 repo 字段不匹配，经沙箱内 pyproject.toml 包名核实，6/6 全部对不上，且删除重建 AGS 工具后仍有 5/6 未恢复——判定为镜像构建阶段的数据缺陷，非运行时缓存问题），已从训练/评测集中剔除。现基于剩余 15 道内容已核实正确的题目重新分层抽样：11 题训练 + 4 题评测，覆盖全部 4 个 repo，evaluation 与 train 不重叠。",
+  "excluded_bad_task_ids": [
+    "swe-synth-0001", "swe-synth-0002", "swe-synth-0003",
+    "swe-synth-0004", "swe-synth-0005", "swe-synth-0006"
+  ],
+  "train_task_ids": [
+    "swe-synth-0011", "swe-synth-0012", "swe-synth-0013", "swe-synth-0014",
+    "swe-synth-0019",
+    "swe-synth-0007", "swe-synth-0008", "swe-synth-0009", "swe-synth-0021",
+    "swe-synth-0016", "swe-synth-0017"
+  ],
+  "eval_task_ids": [
+    "swe-synth-0015", "swe-synth-0020", "swe-synth-0022", "swe-synth-0018"
+  ],
+  "unused_task_ids": []
+}

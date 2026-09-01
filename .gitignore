@@ -21,5 +21,11 @@ outputs/
 wandb/
 *.log
 
+# 本地模型权重缓存（ModelScope 下载，已上传 COS，不入库）
+.model_cache/
+
+# TKE 节点池状态文件（运行时生成，下次 deploy 自动重建）
+.gpu_nodepool_state.json
+
 # 系统文件
 .DS_Store

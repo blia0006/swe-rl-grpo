@@ -35,7 +35,13 @@ MODEL_NAME = os.environ.get("MODEL_NAME", "swe-rl-model")
 # TASK_DIR 对应镜像契约里固定的 /task（COPY task/ /task/，见课题三 Dockerfile），
 # 仅在本地 mock 自测时通过环境变量覆盖为临时目录，真沙箱里永远是 /task。
 TASK_DIR = os.environ.get("TASK_DIR", "/task")
-TASK_JSON_PATH = os.environ.get("TASK_JSON_PATH", os.path.join(TASK_DIR, "task.json"))
+# 实测真沙箱镜像契约：题目信息拆成两个文件（而非单一 task.json）：
+#   /task/metadata.json        task_id/repo/test_cmd/FAIL_TO_PASS/PASS_TO_PASS 等结构化字段
+#   /task/problem_statement.md 纯文本问题描述（Markdown）
+METADATA_JSON_PATH = os.environ.get("METADATA_JSON_PATH", os.path.join(TASK_DIR, "metadata.json"))
+PROBLEM_STATEMENT_PATH = os.environ.get(
+    "PROBLEM_STATEMENT_PATH", os.path.join(TASK_DIR, "problem_statement.md")
+)
 REPO_DIR = os.environ.get("REPO_DIR", "/workspace/repo")
 OUTPUT_PATH = os.environ.get("OUTPUT_PATH", os.path.join(TASK_DIR, "tracing.jsonl"))
 VERIFY_SCRIPT_PATH = os.environ.get("VERIFY_SCRIPT_PATH", os.path.join(TASK_DIR, "verify.sh"))
@@ -74,7 +80,9 @@ def _truncate(text: str, limit: int = MAX_OBS_CHARS) -> str:
 
 
 def call_llm(messages: list[dict]) -> str:
-    """调用 OpenAI 兼容的 chat/completions 接口（vLLM 提供），纯 stdlib 实现。"""
+    """调用 OpenAI 兼容的 chat/completions 接口（GPU Pod 内 `scripts/pod_hf_serve.py`
+    提供，纯 transformers 实现，非 vLLM——实测 GPU 机型是 P4，vLLM 官方不支持其算力），
+    纯 stdlib 实现。"""
     payload = json.dumps({
         "model": MODEL_NAME,
         "messages": messages,
@@ -224,8 +232,14 @@ def tool_run_tests(args: dict) -> tuple[str, dict | None]:
 # --------------------------------------------------------------------------
 
 def load_task() -> dict:
-    with open(TASK_JSON_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+    with open(METADATA_JSON_PATH, "r", encoding="utf-8") as f:
+        task = json.load(f)
+    try:
+        with open(PROBLEM_STATEMENT_PATH, "r", encoding="utf-8") as f:
+            task["problem_statement"] = f.read()
+    except OSError:
+        task.setdefault("problem_statement", "")
+    return task
 
 
 def compute_reward(result: dict | None) -> tuple[float, str, str]:

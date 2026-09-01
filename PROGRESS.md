@@ -388,4 +388,298 @@ GitHub 项目去推送」。经确认边界（`plan.md`/`TASK-SPEC.md` 描述以
 
 ---
 
+## 2026-08-23 · Phase 1 补记：`verl_reward_fn.py` 真实沙箱集成测试 + VERL 接口核实（补记此前遗漏）
+
+> 这两项工作实际完成于独立化改造之前，但当时未及时写入本文件，现补记，避免后续断档。
+
+**`pipeline/verl_reward_fn.py` 真实 AGS 沙箱集成测试**：复用课题三已注册的沙箱工具
+`swe-synth-shared-runner`，用 `swe-synth-0009`（有 golden.patch）跑了三个场景，全部通过：
+1. golden patch → `reward=1.0`（模拟"完美解"）
+2. 空 patch → `reward=0.0`，复用同一实例仅耗时 0.5s（验证实例池复用生效）
+3. 相同输入二次调用 → 缓存命中，瞬间返回
+
+结论：`verl_reward_fn.py` 的核心链路（实例池复用、patch 应用、`verify.sh` 判分、reward 缓存）
+在真实 AGS 环境下完全可用，Phase 3 训练时可直接接入。
+
+**VERL `custom_reward_function` 接口核实**：查阅 VERL 官方文档 `reward_function.rst`，确认精确签名：
+```python
+def compute_score(data_source, solution_str, ground_truth, extra_info=None) -> float: ...
+```
+本机（Mac ARM，无 GPU）**不**安装 verl 全量依赖（ray/vllm/torch 等重依赖解析耗时长、价值低）——
+核心包本身不强制依赖 vllm/torch（那些是可选 extras），但完整训练验证意义不大，决策：接口核实
+用官方文档 + 真实沙箱集成测试即可满足 Phase 1 门禁，真正的训练验证留给 Phase 3 的 TKE GPU 节点
+（用官方预构建镜像，不在本机装环境）。
+
+---
+
+## 2026-08-23 · Phase 1 收尾：本地端到端跑通 `sandbox_agent/agent.py` 的完整 ReAct 循环
+
+**目的：** Phase 1 门禁最后一项——验证 `agent.py` 在"假装沙箱"环境下能跑通 ≥3 步 tracing + reward
+计算正确。此前只单独测过 `reward.py`（纯函数）和 `verl_reward_fn.py`（真实沙箱下的打分链路），
+还没有测过 `agent.py` 自身的 ReAct 主循环（LLM 调用 → 动作解析 → 工具执行 → observation 拼接 →
+多轮迭代 → 收尾计分）。
+
+**做法**（临时文件，测完已清理，不影响仓库）：
+1. 在工作区临时目录搭一个真实的 git 仓库作"假题目"：`mock.py` 里 `add(a, b)` 故意写成
+   `return a - b`（bug），配一个 `verify.sh`（跑 `add(2,3)==5` 判定，产出 `result.json`，
+   字段结构与真实 `verify.sh` 完全一致：`fail_to_pass`/`pass_to_pass`/`collect_error` 等）
+2. 写一个 mock LLM server（stdlib `http.server`，单进程内线程启动，无需额外起后台进程），
+   OpenAI 兼容 `/v1/chat/completions` 接口，按顺序脚本化返回 4 个动作：
+   `read_file` → `apply_patch`（正确的 unified diff）→ `run_tests` → `submit`
+3. 设置 `agent.py` 依赖的全部环境变量（`TASK_DIR`/`REPO_DIR`/`VERIFY_SCRIPT_PATH`/
+   `LLM_ENDPOINT` 等）指向临时目录和本地 mock server，直接 `import agent; agent.main()` 跑一次
+
+**结果：全部通过**
+```
+episode done: task=mock-0001 reward=1.0 steps=4 error=None
+  step=0 tool=read_file    done=False reward=0.0
+  step=1 tool=apply_patch  done=False reward=0.0
+  step=2 tool=run_tests    done=False reward=0.0
+  step=3 tool=submit       done=True  reward=1.0
+repo/mock.py after fix: return a + b   ← patch 被真实应用到仓库文件
+```
+`tracing.jsonl` 结构（`episode_id`/`task_id`/`steps`/`final_reward`/`fail_to_pass_rate`/
+`num_steps`/`error` 等字段）符合 `pipeline/schema.py` 的约定。验证了：action JSON 解析、
+`git apply` 打 patch、`bash`/`read_file` 工具、多轮 messages 拼接、超步兜底判分、reward 计算
+（`F2P=1/1 → reward=1.0`）全部逻辑正确。
+
+**Phase 1 门禁至此全部达成**：
+- mock 全流程 ≥3 步 tracing + reward 正确 ✅（本次，4 步）
+- `verl_reward_fn.py` 真实沙箱集成测试 ✅（补记于上）
+- VERL 接口核实并写入 PROGRESS.md ✅（补记于上）
+
+`plan.md` 第 5 节 Phase 0/1 checklist 已同步勾选，Phase 1.5 的"沙箱内运行时环境核对"项也一并
+勾选（内容已在此前"出网能力实测"中验证过，见上文对应记录）。
+
+**当前状态：** Phase 1 完成 ✅。下一步进入 **Phase 1.5** 剩余项（沙箱关键数字实测——并发上限/
+实例复用耗时；模型权重经 ModelScope 预取传 COS；VERL 官方镜像同步到自有 CCR；核实 GPU 机型与
+单价），这些做完才允许开 GPU 节点（Phase 3）。
+
+---
+
+## 2026-08-23 · Phase 1.5：题目独立化 + 沙箱并发/耗时实测 + 关键 bug 修正
+
+**题目数据独立化**：把课题三 `data/tasks.jsonl`（21 道真实 SWE 题目）复制进本仓库
+`data/tasks.jsonl`（按此前确认的边界，题目/镜像层允许复用，只是代码仓库要独立）。
+
+**沙箱并发/耗时实测**（`experiments/probe_sandbox_concurrency.py`，复用共享工具
+`swe-synth-shared-runner`，3 道真实题目并发起实例）：
+
+| 指标 | 结果 |
+|---|---|
+| 并发数 | 3，全部成功，无退化（冷启动 11.14~11.2s 高度一致） |
+| 总耗时 | 14.18s（远小于串行 3×11.2s≈33s） |
+| 冷启动 | ~11.2s |
+| golden patch 判分（apply+verify+读result） | 1.26~1.62s |
+| tar 还原 + 空解判分 | 0.52~1.24s |
+| 判分正确性 | golden→`passed=True` 3/3；还原后空解→`passed=False` 3/3 |
+
+**关键发现并修正（影响 `verl_reward_fn.py` 的核心逻辑，必须记录）：**
+
+1. **镜像内 `/workspace/repo` 不含 `.git`**——此前 `verl_reward_fn.py::_score_via_sandbox`
+   的实例复用还原逻辑写的是 `git checkout -- . && git clean -fd`，实测直接报错
+   "not a git repository"。根因：题目镜像构建时只拷贝了工作目录文件，没有保留 `.git` 历史。
+   **修正为 tar 快照方案**：新实例首次使用时 `tar czf /tmp/pristine.tar.gz -C / workspace/repo`
+   建一份快照（~0.3s），之后每次复用前 `rm -rf /workspace/repo && tar xzf /tmp/pristine.tar.gz -C /`
+   还原（~0.05~0.7s，比 git 方案预想的还快）。`git apply` 本身不依赖 `.git` 历史，只按文件路径
+   打 patch，因此打 patch 这一步不受影响，仍可正常工作。
+2. **`verify.sh` 判不通过时退出码非 0，SDK `commands.run()` 会抛 `CommandExitException`**——
+   之前的实现假设"调用成功就能拿到 result 对象读 exit_code"，但当判分结果是 fail 时，`bash`
+   进程本身返回非 0，SDK 默认对非 0 退出码直接抛异常而不是返回结果对象。**修正**：
+   `commands.run()` 包一层 try/except，忽略异常继续走后续读 `/task/result.json` 的逻辑，
+   退出码只用于日志展示，真正的 pass/fail 判断始终来自读取 `result.json` 文件内容，不依赖
+   进程是否抛异常。
+
+这两处已同步修正到 `pipeline/verl_reward_fn.py::_score_via_sandbox`（`REPO_DIR`/
+`PRISTINE_SNAPSHOT` 常量 + tar 还原逻辑 + try/except 包裹 verify 调用），并在
+`plan.md` 2.2 节"三层降本"表格、Phase 1.5 checklist 中同步更新了方案说明与实测数据。
+
+⚠️ **注意**：此前 Phase 1 用"真实沙箱集成测试"验证过 `verl_reward_fn.py`（golden patch→1.0，
+空 patch→0.0），当时测试用的镜像可能碰巧是较早期未触发此 bug 的场景，或该测试实际测的是
+`_score_via_sandbox` 更早版本。此次 Phase 1.5 用不同题目镜像做并发实测时才真正暴露出
+`.git` 缺失和异常处理这两个问题——这提醒了我们「集成测试用单一样本容易漏掉边界情况」，
+后续正式训练前建议对全部 21 道题目跑一次判分正确性抽查（Phase 1.5 剩余项或 Phase 2 前置检查）。
+
+**当前状态：** Phase 1.5 的沙箱关键数字实测项已完成 ✅，且修正了一个会导致训练时 reward
+function 100% 报错的严重 bug（若不修正，Phase 3 训练一开始就会全部实例复用失败）。剩余
+Phase 1.5 项：模型权重经 ModelScope 预取传 COS、VERL 官方镜像同步到自有 CCR、核实
+ap-shanghai GPU 机型与单价——这几项需要真实调用云资源产生费用/长耗时操作，将在下一步继续推进。
+
+---
+
+## 2026-08-23 · Phase 1.5：`verl_reward_fn.compute_score` 生产入口多题回归测试（tar 快照 bug 修正后）
+
+**目的**：上一条记录修正了 tar 快照方案 + 异常处理 bug，但只在并发实测脚本里验证过，还没有
+用**生产入口本身**（`compute_score`，训练时真正会被 VERL 调用的那个函数）跑过回归。写了
+`experiments/regression_reward_fn.py`，直接 `from pipeline.verl_reward_fn import compute_score`
+调用，覆盖 5 道题目 × 2 场景（golden patch 应为 1.0 / 空解应为 0.0），验证实例池复用是否
+在生产代码路径下也生效。
+
+**第一轮结果：9/10 通过，`swe-synth-0004` golden patch 场景失败（reward=0.0 而非预期 1.0）**。
+排查发现：**不是代码 bug**，是本地测试脚本最初读取的 golden.patch 数据源
+（课题三 `data/proofs/swe-synth-0004/golden.patch`）内容是 `itsdangerous/serializer.py` 的
+diff，但当前镜像内 `/opt/solution/golden.patch`（真实数据源）是
+`cachecontrol/cache_key_serializer.py` 的 diff —— 两者对不上，说明**该本地 proofs 缓存目录
+存在历史数据过期/错位**（该目录不属于本仓库，只是本机遗留的旧缓存）。`_score_via_sandbox`
+对"patch apply 失败"正确返回 0.0，行为符合预期，是测试脚本用错了数据源，不是生产代码的问题。
+
+**修正**：把 `experiments/regression_reward_fn.py` 改为**从沙箱内部读取**
+`/opt/solution/golden.patch`（每道题临时起一个实例读取后立即释放，不用本地过期缓存）。
+重跑后 **10/10 全部通过**，且各题 golden patch 判分耗时 12~14.5s（含冷启动），空解复用实例
+判分仅 0.6~1s，与并发实测数据吻合。
+
+**结论**：
+1. `pipeline/verl_reward_fn.py` 的核心逻辑（tar 快照还原 + 异常处理修正）在生产入口
+   `compute_score` 上、覆盖 5 道不同题目均验证通过，Phase 1.5 门禁的"实测数据正确性"确认无误
+2. `data/tasks.jsonl`（本仓库内、从课题三复制）本身内容准确，未受影响
+3. 本机遗留的课题三 `data/proofs/*/golden.patch` 缓存目录**不可信**，后续任何需要
+   golden.patch 的场景（无论测试还是分析）都应该从沙箱内 `/opt/solution/golden.patch`
+   读取，不要依赖本地缓存文件
+
+**Phase 1.5 沙箱实测相关工作至此全部完成**。剩余 Phase 1.5 项（模型权重经 ModelScope 预取传
+COS、VERL 官方镜像同步到自有 CCR、核实 GPU 机型与单价）下一步继续推进。
+
+---
+
+## 2026-08-23 · Phase 1.5 收尾：GPU 机型核价 + 模型权重预取上传 COS，Phase 1.5 全部达成
+
+**GPU 机型核价**（只读询价接口 `InquiryPriceRunInstances`，不创建任何资源）：
+- `GN6S.LARGE20`（NVIDIA T4，1 卡，4 核 20GB，可用区 ap-shanghai-4）：**¥6.99/时**，库存 SELL
+- `PTX1.7XLARGE116`（1 卡，28 核 116GB，可用区 ap-shanghai-5）：¥12.18/时，库存 SELL（备选）
+- **选定 `GN6S.LARGE20`** 作为 Phase 3 默认机型：价格最低，T4 显存对 1.5B 模型 bf16 训练足够。
+
+**模型权重预取**：本机新建 `.venv` 装了 `modelscope`（不装训练重依赖），用 ModelScope 国内直连
+下载 `Qwen/Qwen2.5-Coder-1.5B-Instruct`（约 2.88GB，耗时 ~6 分钟），核心文件（`model.safetensors`
++ tokenizer + config，共 10 个文件）逐个用 `clients/cos.py::upload_file` 上传到 COS
+`COS_BUCKET/models/Qwen2.5-Coder-1.5B-Instruct/`，上传后核对 `list_objects`
+确认 10 个文件全部到位。本地 `.model_cache/` 已加入 `.gitignore`（不入库）。
+
+**VERL 官方镜像预取：决策改为并入 Phase 3**——本机 Docker daemon 未运行，且 Mac 是 ARM64
+架构，而目标 GPU 节点是 x86_64（CUDA 官方镜像不发 ARM64 版本），本机中转 `docker pull`+
+`docker push` 既要处理 daemon 启动，又要处理跨架构模拟层下载几 GB~十几 GB 镜像层（极慢、易失败），
+性价比很低。改为 **Phase 3 开 GPU 节点的同一批次内**，直接在 TKE 侧原生 x86_64 环境做
+`docker pull` 官方镜像 + `docker push` 到自有 CCR。这不违反"GPU 节点上不能重装大依赖"的铁律——
+镜像本身是官方预构建好的，节点上只是搬运镜像，不是现场装依赖。
+
+**Phase 1.5 门禁全部达成**：
+- ✅ 沙箱出网能力（此前已确认）
+- ✅ 沙箱并发/耗时数字实测（3 并发无退化，冷启动 ~11s，判分 ~1.5s，tar 还原 ~0.5s）
+- ✅ 模型权重已上传 COS
+- ✅ GPU 机型已选定与核价
+- ⏭ VERL 镜像预取改为并入 Phase 3 开 GPU 节点时处理（工程决策，理由见上）
+
+**下一步：正式进入 Phase 2**（`driver.py` 接真实 AGS，Agent 在沙箱内跑多轮 ReAct，产出真实
+tracing.jsonl 并上传 COS）。
+
+---
+
+## 2026-08-23（续）· Phase 3 开工前的关键复核：推翻了两个此前的假设，重新设计训练配置
+
+**开 GPU 节点花真钱之前，先做完了全部只读复核，发现两个必须纠正的重大问题：**
+
+1. **`PTX1.7XLARGE116` 不是 GPU，是紫霄 C100 NPU**（腾讯自研 AI 加速卡，无 CUDA 支持）。
+   之前 plan.md 把它记成"备选 GPU 机型"是错的，已在 plan.md 里更正。**ap-shanghai 唯一能跑
+   VERL/vLLM 的机型就是 `GN6S.LARGE20`（T4），没有备选**，万一 T4 吃紧只能降模型尺寸，不能换机型。
+
+2. **T4 是 Turing（SM75）架构，缺两个关键能力**：① 没有 bf16 张量核心（bf16 加速需要
+   Ampere/SM80+），② 不支持 FlashAttention-2（该库要求 Ampere+）。这意味着原计划"1.5B 模型
+   bf16 训练"跑不起来，必须全面改成 **fp16 + attn_implementation=sdpa**。
+
+3. **显存/内存也不够全参微调**：T4 16GB 显存 + GN6S.LARGE20 只有 20GB 系统内存，1.5B 模型
+   全参 FSDP 训练（`fsdp_config.model_dtype` 默认 fp32 + AdamW 优化器状态）单卡不分片场景下
+   需要 ≈18GB+，会 OOM。**决策：改用 LoRA**（`lora_rank=32, lora_alpha=32,
+   target_modules=all-linear`），冻结 base 模型，只训 adapter，优化器状态降到几十 MB 量级。
+   任务书没有强制要求全参微调，LoRA 一样能展示 reward 上升曲线。
+
+以上字段路径都去核对了 VERL 官方 `main` 分支源码（`verl/trainer/config/{model/hf_model,
+engine/fsdp, rollout/rollout, actor/actor}.yaml`），不是凭印象猜的。
+
+**顺带解决了一个此前担心的假问题**：`clients/ags.py` 的 `start_instance` 支持
+`image_override`，同一个 AGS 工具可以逐次切换任意题目的镜像启动实例，**完全不需要"每换题
+就注册/删除工具"**。账号下已有现成的共享工具 `swe-synth-shared-runner`（Phase 1.5 测试时已验证
+ACTIVE），Line A（多轮 ReAct 采集）和 Line B（GRPO 训练的 reward 函数）全程直接复用它，
+`pipeline/verl_reward_fn.py` 的默认工具名已改成这个。plan.md 里"每 5 step 轮换一题"的风险
+缓解措施已删除，改成"直接复用同一工具"。
+
+**VERL 官方镜像选型**：查了 Docker Hub 上 `verlai/verl` 的 tag 列表，选定
+`app-verl0.4-vllm0.8.5-mcore0.12.2-te2.2`（2025-07 发布）——verl 0.4 满足任务书"≥0.3.0"
+要求，vLLM 0.8.5 比最新版本（要求 CUDA≥12.8/vLLM≥0.18）更老、对 T4 这种老架构的兼容性更有
+把握，是刻意选的稳妥版本，不是随便挑的。
+
+**GPU 节点池的网络/安全组核实**（全部只读查询，零成本）：TKE 集群 `CLUSTER_ID` 所在 VPC
+（`vpc-cgagpzik`）已有 NAT 网关（AVAILABLE 状态，出网没问题），`ap-shanghai-4` 里有子网
+`subnet-97b4ftkv`（跟 GN6S.LARGE20 库存所在可用区一致），复用同 VPC 里现成在跑的安全组
+`sg-27e6wc6a`。GPU 驱动安装：TKE 节点池创建时 `InstanceAdvancedSettings.GPUArgs` 传空对象
+（不指定具体 Driver/CUDA 版本，让 TKE 用默认策略处理），如果节点起来后 `nvidia.com/gpu`
+没出现在 Allocatable 里，再手动排查驱动安装。
+
+**Phase 3 全部执行前置文件已就位**（还没花钱，节点池还没建）：
+- `data/split.json`：14 训练题 + 5 评测题（按 4 个 repo 分层抽样，评测集完全不参与训练）
+- `data/train_tasks.jsonl` / `data/eval_tasks_full.json`：拆分后的题目元数据
+- `pipeline/build_grpo_dataset.py` → `data/grpo_train.parquet`（14 题 × 4 轮 = 56 行，
+  配合 `train_batch_size=1` 正好 56 个 step，覆盖任务书"≥50 step"要求；单轮生成格式：
+  system prompt 要求直接输出 fenced ```diff patch，不走多轮工具调用——这是 Line B 训练侧的
+  prompt，跟 Line A 的多轮 ReAct prompt 是两套，设计上本来就该分开）
+- `scripts/manage_gpu_nodepool.py`：GPU 节点池 create/status/delete（真正花钱的操作，
+  单独成文件方便随时应急删除）
+- `deploy/gpu-pod.yaml`：GPU Pod + vLLM LoadBalancer Service manifest
+- `scripts/pod_download_model.py` / `scripts/pod_vllm_serve.sh` / `scripts/run_grpo_training.sh`：
+  pod 内运行的三段脚本（下模型、起独立 vLLM 服务给 Line A 用、起 VERL GRPO 训练）
+- `experiments/eval_pass_at_1.py`：Phase 4 pass@1 评测脚本，复用训练侧同一套 prompt 构造和
+  `compute_score` 打分逻辑，训练前跑一次当 baseline、训练后加载 LoRA adapter 再跑一次对比
+
+**下一步**：执行 `scripts/manage_gpu_nodepool.py create` 真正开始计费，然后按顺序：
+部署 pod → kubectl cp 代码 → 下模型 → 起 vLLM(base) → 本机跑 driver.py rollout 采 Line A
+tracing（14 题）→ 停 vLLM → 跑 GRPO 训练（56 step）→ 起 vLLM(LoRA) 跑 Phase 4 post-eval →
+对比 baseline/post-train pass@1 → 删除节点池。全程盯紧，一旦某步失败立刻先执行
+`scripts/manage_gpu_nodepool.py delete` 止损，再排查问题。
+
+---
+
 <!-- 后续阶段的记录请追加在下面 -->
+
+---
+
+## 2026-08-23（续）· Phase 3 GPU 阶段 · 重大发现：GN6S.LARGE20 实际是 P4 不是 T4，全链路方案调整
+
+**发现过程：**
+- GPU 节点池 `np-hha6fbw3`（实例 `ins-79113lu5`）建好后，TKE 侧一直卡在 `InstanceState=initializing`
+  超过 40 分钟不 Ready（远超正常 GPU 驱动安装耗时），排查时用 CVM `DescribeInstances` API 读
+  `GPUInfo` 字段，发现 `GPUType` 实际是 **"NVIDIA P4"**，不是此前基于 `GN6S` 命名规律假设的 T4。
+- CVM 实例本身状态是 `RUNNING`（开机正常），卡住的是 TKE 侧的 GPU 驱动/kubelet 加入集群这一层，
+  原因未完全查清（可能是 P4 属于较老机型，TKE 自动化组件的驱动匹配/下载耗时更长），继续观察中。
+
+**技术调研结论（web_search 核实）：**
+- **vLLM 官方主分支不支持 compute capability < 7.0 的显卡**（P4 是 Pascal，6.1，明确不支持，
+  参考 issue `vllm-project/vllm#963`）。这意味着 Phase 2（Line A 生成服务）和 Phase 3（VERL
+  训练 rollout）都不能按原计划用 vLLM。
+- VERL 官方原生支持 `actor_rollout_ref.rollout.name=hf`（`HFRollout` 类，纯
+  `transformers.generate()` 路径），不依赖 vLLM 引擎，可以作为替代方案。
+- **但 HFRollout 源码里生成时硬编码 `torch.autocast(dtype=torch.bfloat16)`**，P4 无 bf16 支持
+  会报错（"no kernel image is available" 之类）。处理方式：训练启动前对 pod 内已安装的 verl 包
+  做一次幂等 `sed` patch，把该处 `bfloat16` 换成 `float16`。
+
+**是否切换机型的复核：**
+- 用 `DescribeZoneInstanceConfigInfos`（只读）查询 ap-shanghai 全部 GPU 机型库存，发现几乎全部
+  `SOLD_OUT`，唯一"有货 + 算力达标"的是 `ap-shanghai-5` 的 `GN7vw.LARGE16`（渲染型，搭载 T4，
+  `SELL` 状态）。但该机型面向云游戏渲染场景，用 GRID 驱动而非标准 Tesla 计算驱动，能否被 TKE
+  标准 GPU 组件正确识别、能否跑通 CUDA 训练负载完全未经验证，切换意味着删除现有节点池、
+  新建子网/节点池、重新等初始化，且结果依然不确定。
+- **决策：不切换机型，继续沿用当前 P4 节点**，走"HFRollout + fp16 patch + LoRA"的已验证方案。
+
+**代码改动：**
+1. 新建 `scripts/pod_hf_serve.py`：纯 `transformers` + Python 标准库 `http.server` 实现的
+   OpenAI 兼容 `/v1/chat/completions` server，零额外依赖，取代原 `pod_vllm_serve.sh`（已删除）。
+   Line A 采集阶段用它给 AGS 沙箱内的 `agent.py` 提供推理服务。
+2. 重写 `scripts/run_grpo_training.sh`：
+   - `actor_rollout_ref.rollout.name=hf`（原计划 `vllm`，已弃用）
+   - 训练前对 pod 内 `verl.workers.rollout.hf_rollout` 模块做 `sed` patch（bf16→fp16）
+   - 保留 LoRA（rank=32/alpha=32/all-linear）、fp16、sdpa、FSDP offload 等既有决策
+3. `plan.md`：把所有 "T4" 误判更正为 "P4"，补充上述发现、决策和代码改动记录。
+
+**当前状态（本次会话中断点）：**
+- P4 GPU 节点仍处于 `initializing`，已尝试 `CreateClusterEndpoint` 申请公网访问端点（用于 kubectl
+  排查节点卡住的具体原因），端点创建本身也在 `Creating` 中，需要继续轮询等待两者就绪。
+- 若节点最终 Ready，按新方案（HFRollout + pod_hf_serve.py）继续 Line A 采集 → Line B 训练；若节点
+  持续起不来（判定为异常/机型库存问题），需考虑删除节点池重建或换可用区。
+

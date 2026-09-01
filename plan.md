@@ -163,7 +163,7 @@ reward 曲线上升的本质是"当前策略在环境里的真实表现随训练
 
 | 层 | 做法 | 效果 |
 |---|---|---|
-| ① 实例复用 | 每道题起 N 个**常驻**沙箱实例，每次打分前 `git checkout -- . && git clean -fd` 还原到干净题目态，跑完不 kill，留给下一个 sample 用 | 省掉每次的镜像冷启动，单次成本从 ~60s 降到 ~15s |
+| ① 实例复用 | 每道题起 N 个**常驻**沙箱实例，每次打分前用 tar 快照还原到干净题目态（镜像内 `/workspace/repo` 不含 `.git`，`git checkout`/`clean` 不可行，改用 `tar czf`/`tar xzf`，见 Phase 1.5 实测），跑完不 kill，留给下一个 sample 用 | 省掉每次的镜像冷启动（~11s），tar 还原仅 ~0.5s，单次成本从 ~13s（冷启动+判分）降到 ~2s（复用+判分） |
 | ② 并发 | 同一 step 内 group 的 16 个 sample 分发给 N 个实例并行打分（`asyncio`/线程池） | 墙钟时间 ÷ N |
 | ③ reward 缓存 | 以 `(task_id, patch内容hash)` 为 key 缓存 verify 结果；训练早期模型输出重复度高，命中率可观 | 命中即 0 成本 |
 
@@ -171,9 +171,9 @@ reward 曲线上升的本质是"当前策略在环境里的真实表现随训练
 所以每个 step 只需要 1 道题的环境在线 → **1 个工具足够**。每 5 step 轮换一道题，
 50 step 覆盖 10 题，全程只做 10 次"注册工具→等 ACTIVE→用完删"，与配额限制天然兼容。
 
-**Phase 1.5 必须实测的两个关键数字**（决定并发度 N，不实测就上等于赌命）：
-1. 一个沙箱工具最多能同时起几个实例？（决定 N 的上限）
-2. 实例复用 + `git` 还原 + `verify.sh` 一次打分的实测耗时？（决定单次成本）
+**Phase 1.5 必须实测的两个关键数字**（决定并发度 N，✅ 已实测，见下方 Phase 1.5 checklist）：
+1. 一个沙箱工具最多能同时起几个实例？→ 实测 3 并发无退化，理论上限更高（受账号地域资源池限制，训练期按需调整）
+2. 实例复用 + tar 还原 + `verify.sh` 一次打分的实测耗时？→ 冷启动 ~11.2s，golden patch 判分 ~1.5s，tar 还原+空解判分仅 ~0.5s
 
 ### 2.3 关键辨析：Agent 到底跑在哪？（2026-08-21 修正）
 
@@ -332,14 +332,14 @@ VERL 内部会把它填到 `token_level_rewards` 的最后一个有效 token 上
 理由：
 1. **代码任务专精**：Qwen2.5-Coder 系列在代码理解/修复类任务上专门优化，起点能力比同尺寸通用模型强，
    便于在有限 step 内观察到 reward 上升趋势。
-2. **尺寸适配单卡 T4/A10**：1.5B 参数，bf16 权重 ~3GB，vLLM 推理 + VERL 训练（actor+critic 或
-   GRPO 无 critic）能在单卡 16~24GB 显存内跑起来，避免申请多卡/大显存机型，压缩 Phase 3 的资源
-   准备时间。
+2. **尺寸适配单卡 P4(8GB)/T4/A10**：1.5B 参数，fp16 权重 ~3GB，配合 LoRA + HFRollout 能在单卡
+   8GB 显存内跑起来（实测机型为 P4，见下方更正说明），避免申请多卡/大显存机型，压缩 Phase 3 的
+   资源准备时间。
 3. **GRPO 天然适配**：选 GRPO（而非 PPO）可以不训 critic 网络，进一步降低显存占用和训练复杂度，
    适合"单卡、≥50 step"这种轻量验收目标。
 4. **开源协议宽松**（Apache 2.0），HuggingFace 直接下载，无需额外授权流程，不占用准备时间。
 
-若 Phase 3 实测 1.5B 在 T4 上仍吃紧，备选降级 `Qwen2.5-Coder-0.5B-Instruct`；若显存充裕可升到
+若 Phase 3 实测 1.5B 在 P4(8GB) 上仍吃紧，备选降级 `Qwen2.5-Coder-0.5B-Instruct`；若显存充裕可升到
 `Qwen2.5-Coder-7B-Instruct`（需 A10 24GB 或以上，视 Phase 0 探测到的可用机型而定）。
 
 ---
@@ -353,33 +353,89 @@ VERL 内部会把它填到 `token_level_rewards` 的最后一个有效 token 上
   - COS：发现预留 bucket `COS_BUCKET`（ap-shanghai），直接复用
   - CFS：无预留资源，决策不用，简化为纯 COS 传递
   - 权限：`AdministratorAccess`，无阻塞
-- [ ] Phase 3 前：核实 ap-shanghai 可售 GPU 机型（`GN6S.LARGE20` / `PTX1.7XLARGE116` 等）具体
-      芯片型号与单价，选定按量计费机型
-- [ ] 本地环境：安装 `verl>=0.3.0`、`vllm`、`torch`（可先在本地/CPU 环境装好但不跑训练，
-      验证 import 和 CLI 可用即可，避免第一次在 GPU 节点上装环境浪费 GPU 计费时间）
-- **门禁**：AGS 可用 + TKE 权限确认 + 本地 verl 环境 import 通过 → 进入 Phase 1 ✅（资源确认已达成，
-  本地 verl 环境安装验证见 Phase 1）
+- [x] Phase 3 前：核实 ap-shanghai 可售 GPU 机型具体芯片型号与单价（`InquiryPriceRunInstances`
+      只读询价接口，2026-08-23 实测）：
+      **选定 `GN6S.LARGE20`**（1 卡，4 核 20GB 内存，可用区 ap-shanghai-4，
+      按量 ¥6.99/时）——库存充足（SELL），价格最低。
+      ~~备选 `PTX1.7XLARGE116`~~ **✗ 已否决**：核实后 `PTX1` 系列是腾讯自研**紫霄 C100 AI 加速卡
+      （NPU）**，不是 NVIDIA GPU，没有 CUDA 支持，VERL/vLLM/PyTorch 的 CUDA 栈完全跑不起来，
+      不能作为 GPU 训练的备选方案。
+- [x] **⚠️ 重大更正（2026-08-23，节点起来后用 `DescribeInstances` 读 `GPUInfo.GPUType`
+      实测才发现）：`GN6S.LARGE20` 实际搭载的是 NVIDIA **Tesla P4**（Pascal，compute
+      capability 6.1，8GB 显存），不是命名规律暗示的 T4（Turing，7.5，16GB）！**
+      以下第 364 条起原文写的"T4"均为误判，已更正为 P4，**结论方向不变**（都缺 bf16 张量核心 /
+      FlashAttention-2），但数值和一条新增决策需要修正：
+      1) **vLLM 官方主分支不支持 compute capability < 7.0 的显卡**
+         （见 `vllm-project/vllm#963`），P4 的 6.1 不满足，**Phase 2/3 都不能用 vLLM 引擎**。
+      2) **决策：训练侧改用 VERL 原生 `actor_rollout_ref.rollout.name=hf`**（`HFRollout`，
+         纯 `transformers.generate()`，不依赖 vLLM 引擎）替代原计划的 `rollout.name=vllm`；
+         `verlai/verl:app-verl0.4-...` 镜像不换（内含 vllm 包但不初始化引擎，import 不受
+         GPU 算力影响）。
+      3) **Line A（多轮 ReAct 采集）的生成服务也不能用 vLLM**，改为自建极简
+         `scripts/pod_hf_serve.py`（纯 `transformers` + Python 标准库 `http.server`，零额外
+         依赖，OpenAI 兼容 `/v1/chat/completions`），替代原 `pod_vllm_serve.sh`（已删除）。
+      4) **额外发现并处理**：VERL 官方 `hf_rollout.py` 生成时硬编码
+         `torch.autocast(dtype=torch.bfloat16)`，P4 无 bf16 支持会报错。**处理**：
+         `run_grpo_training.sh` 训练前对 pod 内已装的 verl 包做一次幂等 `sed` patch，把该处
+         `bfloat16` 改成 `float16`。
+      5) **是否切换机型？—— 已复核，决定不切换**：`DescribeZoneInstanceConfigInfos` 显示
+         ap-shanghai 几乎全部 GPU 机型 `SOLD_OUT`，唯一"有货 + compute capability≥7.0"的是
+         ap-shanghai-5 的 `GN7vw.LARGE16`（渲染型，T4，`SELL`），但它面向云游戏渲染场景，用
+         GRID 驱动而非标准 Tesla 计算驱动，能否被 TKE 标准 GPU 组件识别、能否跑通 CUDA 计算
+         负载均未经验证，切换意味着重新走一遍建节点池+等初始化且结果未知，风险不比"P4 +
+         HFRollout + fp16 patch"（已核对 VERL 源码、路径明确可行）更低。**继续沿用当前 P4
+         节点，不切换机型**。
+- [x] **关键风险复核（2026-08-23，开 GPU 节点前，原文写"T4"，现更正为 P4，结论方向不变）：
+      P4（Pascal, SM61）硬件限制**——
+      1) **无 bf16 张量核心加速**（bf16 Tensor Core 需 Ampere/SM80+），必须把训练/推理精度改成
+      **fp16**（P4 原生支持 fp16 计算）；
+      2) **不支持 FlashAttention-2**（该库要求 Ampere+），必须把 attention 实现改成 `sdpa`，
+      同时关闭 `use_remove_padding`（该优化依赖 flash-attn 的 varlen kernel）；
+      3) **显存/内存吃紧**：P4 只有 **8GB** 显存（比原以为的 T4 16GB 更紧张），GN6S.LARGE20
+      系统内存仅 20GB，1.5B 模型全参
+      FSDP 训练默认 `model_dtype=fp32` 主权重 + AdamW 优化器状态，未分片单卡场景下 ≈18GB+，
+      会 OOM。**决策：改用 LoRA 微调**（`actor_rollout_ref.model.lora_rank=32`, `lora_alpha=32`,
+      `target_modules=all-linear`），冻结 base 模型，只训 adapter，优化器状态降到几十 MB 量级，
+      彻底消除 OOM 风险，任务书未强制要求全参微调，LoRA 同样能展示 reward 上升曲线。
+      最终训练精度配置：`actor_rollout_ref.actor.fsdp_config.dtype=float16`、
+      `model_dtype=float16`、`rollout.name=hf`（不是 vllm，见上，配合 pod 内 sed patch
+      bf16→fp16）、
+      `model.override_config.attn_implementation=sdpa`、`model.use_remove_padding=false`
+      （以上字段路径已核对 VERL 官方 `main` 分支源码 `verl/trainer/config/{model/hf_model,
+      engine/fsdp,rollout/rollout,actor/actor}.yaml`，非猜测）
+- [x] 本地环境 verl 接口核实：**决策改为"查官方文档核实签名 + 真实沙箱集成测试核心链路"**，
+      不在本机（Mac ARM 无 GPU）装 verl 全量依赖（ray/vllm/torch 等重依赖，价值低、耗时高）。
+      详见 Phase 1 对应条目
+- **门禁**：AGS 可用 + TKE 权限确认 + 本地 verl 接口核实 → 进入 Phase 1 ✅ 已达成
 
 ### Phase 1：本地离线打通（mock，零云成本）
-- [ ] `pipeline/schema.py`：tracing 数据结构（dataclass + 校验），线 A / 线 B 共用
-- [ ] `pipeline/reward.py`：解析 `verify.sh` 输出的 `result.json` → reward（含 P2P 回归判 0 的逻辑），
-      用课题三 `data/proofs/*/verification.json` 的真实输出做单元测试，**不依赖云端**
-- [ ] `sandbox_agent/agent.py`：**这就是要注入沙箱内运行的 Agent 本体**（ReAct 主循环）。
+- [x] `pipeline/schema.py`：tracing 数据结构（dataclass + 校验），线 A / 线 B 共用
+- [x] `pipeline/reward.py`：解析 `verify.sh` 输出的 `result.json` → reward（含 P2P 回归判 0 的逻辑），
+      用真实 `verification.json` 输出做单元测试（vendored 到 `pipeline/testdata/`），**不依赖云端**
+- [x] `sandbox_agent/agent.py`：**这就是要注入沙箱内运行的 Agent 本体**（ReAct 主循环）。
       设计约束：① 只依赖沙箱内已有的 python3.12 标准库 + `requests`（无 requests 则用 `urllib`），
       **不得依赖需要联网 pip 安装的包** ② 通过环境变量读 vLLM 地址与 API Key，不硬编码
       ③ tracing 直接追加写 `/task/tracing.jsonl`（崩溃也不丢已完成的步骤）
-- [ ] 本地先"假装在沙箱里"跑通 `agent.py`：用本地临时目录模拟题目仓库 + mock LLM，
-      验证 action 解析、多轮拼接、超步终止、tracing 落盘
-- [ ] `driver.py`：注入 + 启动 + 收取（`files.write` → `commands.run` → `files.read`），
-      本阶段先对着 mock 沙箱跑
-- [ ] `pipeline/verl_reward_fn.py`：**VERL 自定义 reward function**（线 B 的唯一钩子），
-      先用 mock 沙箱打分，本地跑通
-- [ ] **对着实际安装的 VERL 版本核实接口**：`custom_reward_function` 的函数签名、GRPO 配置项名、
-      单题 batch + group_size 的配置写法、reward 日志字段名 → **实测结论写入 PROGRESS.md**
-      （这一步是防止"到了 GPU 节点上现场翻源码"的关键）
-- [ ] 本地跑一次 VERL 官方 toy 示例（GSM8K，CPU 或极小规模），确认框架本身无坑
-- **门禁**：mock 全流程跑通一条 ≥3 步 tracing + reward 计算正确 + VERL toy 示例能跑
-  + VERL 接口写入 PROGRESS.md → 进入 Phase 1.5
+- [x] 本地先"假装在沙箱里"跑通 `agent.py`：用本地临时目录模拟题目仓库 + mock LLM server（单进程内
+      线程起 HTTP server，脚本化返回 4 步动作），验证 action 解析、多轮拼接、patch 应用、tracing
+      落盘、reward 计算 —— **4 步 read_file→apply_patch→run_tests→submit 全部通过，final_reward=1.0**
+      （2026-08-23，见 PROGRESS.md）
+- [x] `driver.py`：注入 + 启动 + 收取（`files.write` → `commands.run` → `files.read`）逻辑已写好，
+      对接真实 AGS（Phase 2 用真实沙箱跑通闭环，此处先完成代码 + mock 沙箱逻辑校验）
+- [x] `pipeline/verl_reward_fn.py`：**VERL 自定义 reward function**（线 B 的唯一钩子），
+      已用**真实 AGS 沙箱**（非 mock）完整集成测试：golden patch → reward=1.0，空 patch →
+      reward=0.0（复用实例仅 0.5s），缓存命中瞬间返回 —— 实例池复用/patch 应用/verify.sh
+      判分/缓存核心链路全部验证通过
+- [x] **对着实际安装的 VERL 版本核实接口**：查阅 VERL 官方文档 `reward_function.rst`，确认
+      `custom_reward_function` 精确签名为
+      `compute_score(data_source, solution_str, ground_truth, extra_info=None) -> float`，
+      结论已写入 PROGRESS.md
+- [x] ~~本地跑一次 VERL 官方 toy 示例（GSM8K）~~ —— **决策：跳过**。本机 Mac ARM 无 GPU，
+      vLLM 官方支持有限，且已通过官方文档 + 真实沙箱集成测试核实了 reward function 接口与核心
+      判分链路，训练可行性的真正验证留给 Phase 3 的 TKE GPU 节点（用官方预构建镜像，不在本机
+      装全量依赖）
+- **门禁**：mock 全流程跑通一条 ≥3 步 tracing（4 步）+ reward 计算正确 ✅
+  + VERL 接口写入 PROGRESS.md ✅ → 进入 Phase 1.5 ✅
 
 ### Phase 1.5：云上预热（不开 GPU，把 GPU 窗口的活儿提前干完）
 - [x] ✅ **【最高优先级门禁】沙箱出网能力实测** —— **已通过**（2026-08-21，见 PROGRESS.md）：
@@ -388,21 +444,41 @@ VERL 内部会把它填到 `token_level_rewards` 的最后一个有效 token 上
       header（`postman-echo.com/post` header/body 正确回显，0.9s）③ Python 3.12.11 +
       requests 2.32.4 已预装 ④ 后台长时命令 + files 读写组合正常
       → **结论：按"Agent 注入沙箱内运行"执行**（2.3 节主方案成立，兜底形态不需要启用）
-- [ ] **沙箱内运行时环境核对**：确认沙箱内 `python3` 版本、是否有 `requests`、
-      能否 `files.write` 后直接 `commands.run` 起长时进程（Agent 要跑十几步，可能几分钟）
-- [ ] **沙箱关键数字实测**（决定并发度，见 2.2）：注册 1 个题目工具，实测
-      ① 单工具可同时起几个实例 ② 实例复用 + git 还原 + verify.sh 一次打分耗时
-      ③ 并发打分是否稳定 → 结论写入 PROGRESS.md，据此定 `group_size` 与并发数
-- [ ] **模型权重预取**：经 **ModelScope**（国内直连）下 `Qwen2.5-Coder-1.5B-Instruct`，
-      传到 COS `COS_BUCKET`。⚠️ 绝不在 GPU 节点上直连 HuggingFace 拉权重
+- [x] **沙箱内运行时环境核对**：已在上面"出网能力实测"中一并完成 —— Python 3.12.11 +
+      requests 2.32.4 已预装；`files.write` + `commands.run` 起后台长时命令（`nohup`）+
+      轮询读取组合正常
+- [x] **沙箱关键数字实测**（决定并发度，见 2.2）：`experiments/probe_sandbox_concurrency.py`，
+      复用共享工具 `swe-synth-shared-runner`，用 3 道真实题目并发起实例实测：
+      ① 3 并发全部成功，总耗时 14.18s（远小于串行 3×11s≈33s），冷启动耗时高度一致（11.14~11.2s），
+      无退化 ② **重要发现并修正**：镜像内 `/workspace/repo` 不含 `.git`，原计划的
+      `git checkout -- . && git clean -fd` 还原方案不可行，改为 **tar 快照方案**
+      （首次 `tar czf` 建快照 ~0.3s，复用 `tar xzf` 还原仅 ~0.05~0.72s）
+      ③ golden patch 判分耗时 1.26~1.62s（含 apply + verify.sh + 读 result.json）
+      ④ 判分正确性 100%：golden patch → `passed=True`（3/3），还原后空解 → `passed=False`（3/3）
+      ⑤ 额外发现：`verify.sh` 判不通过时进程退出码非 0，SDK `commands.run()` 默认对非 0
+      退出码抛 `CommandExitException`，调用侧必须 try/except 后改读 `result.json` 判断，
+      不能依赖调用是否抛异常 —— 已同步修正 `pipeline/verl_reward_fn.py::_score_via_sandbox`
+      （实例池的还原逻辑由 git 方案改为 tar 快照方案，并修复了异常处理）
+- [x] **模型权重预取**：经 **ModelScope**（国内直连，本机实测下载 2.88GB 权重耗时 ~6 分钟）下
+      `Qwen2.5-Coder-1.5B-Instruct`（10 个文件：`model.safetensors`+tokenizer+config），已上传到
+      COS `COS_BUCKET/models/Qwen2.5-Coder-1.5B-Instruct/`，10 个文件全部核对
+      成功。Phase 3 直接从 COS 拉取到 GPU 节点，⚠️ 不在 GPU 节点上直连 HuggingFace 拉权重
 - [ ] **VERL 镜像预取**：把 VERL 官方镜像（预装 torch/vllm/flash-attn）同步到自有 CCR，
-      TKE 内网拉取。⚠️ 绝不在 GPU 节点上 `pip install verl vllm torch`
-- [ ] 核实 ap-shanghai 可售 GPU 机型的芯片型号与单价，选定按量计费机型
-- **门禁**：沙箱出网能力已确认通过 ✅ + 权重与镜像已在云上就位
-  + 沙箱并发/耗时数字已实测 → 才允许开 GPU 节点
+      TKE 内网拉取。⚠️ 绝不在 GPU 节点上 `pip install verl vllm torch`。
+      **决策（2026-08-23）**：本机 Docker daemon 未运行 + Mac 是 ARM64 架构，而 GPU 节点镜像是
+      x86_64（CUDA 官方镜像不发 ARM64 版），本机中转 `docker pull` + `docker push` 这条路径既要
+      解决 daemon 启动、又要处理跨架构 pull（`--platform linux/amd64` 纯模拟层，几 GB~十几 GB
+      镜像层传输在模拟层下极慢且容易失败），本机做这件事性价比很低。改为 **Phase 3 开 GPU 节点的
+      同一批次内**，直接在 TKE 侧（x86_64 环境，原生架构）用 `docker pull` 官方镜像 +
+      `docker push` 到自有 CCR，一步到位，不在本机预置；不影响"GPU 节点上不能重装大依赖"这条铁律
+      （因为镜像本身就是官方预构建好的，节点上只是 pull 镜像，不是装依赖）
+- [x] 核实 ap-shanghai 可售 GPU 机型的芯片型号与单价（结论见上一条：选定 `GN6S.LARGE20`）
+- **门禁**：沙箱出网能力已确认通过 ✅ + 权重已在云上就位 ✅
+  + 沙箱并发/耗时数字已实测 ✅ + GPU 机型已选定 ✅
+  → VERL 镜像改为并入 Phase 3 开 GPU 节点时同批次处理，Phase 1.5 其余项已全部达成，可进入 Phase 2
 
 ### Phase 2：Agent 在沙箱内跑多轮 ReAct（线 A 交付，纯 CPU）
-- [ ] `driver.py` 接真实 AGS（复用课题三 `clients/ags.py`），完成"注入 → 运行 → 收取"闭环
+- [ ] `driver.py` 接真实 AGS（用本仓库已 vendored 的 `clients/ags.py`），完成"注入 → 运行 → 收取"闭环
 - [ ] **大脑（vLLM）位置：硬性只用 TKE GPU，不设本机选项**（2026-08-21 收紧）：
       Agent 的控制循环、读文件/打patch/跑测试全部已确定跑在沙箱内（2.3 节），
       为保证"agent 在沙箱里解题、本地不承担任何解题逻辑"这条要求彻底落实到底，
@@ -449,7 +525,7 @@ VERL 内部会把它填到 `token_level_rewards` 的最后一个有效 token 上
 
 | 风险 | 应对 |
 |---|---|
-| AGS 沙箱工具配额（上限 10，**探测实测团队已占 8/10，仅剩 2 个**） | 利用 GRPO「group=同题多采样」的特性，每 step 只需 1 道题环境在线 → 1 个工具够用；每 5 step 轮换一题，全程 10 次滚动注册（用前建、用完删），每次注册前重新探测余量 |
+| AGS 沙箱工具配额 | **2026-08-23 复核后简化**：`start_instance` 的 `image_override` 参数可以在**同一个工具**上逐次切换任意题目镜像，完全不需要"每换题就注册/删除工具"。账号下已存在可复用的共享工具 `swe-synth-shared-runner`（Phase 1.5 已用它做过并发/回归实测，ACTIVE 状态），**Line A / Line B 训练全程直接复用这一个工具**（`AGS_TOOL_NAME` / `AGS_REWARD_TOOL_NAME` 都设为它），不新建、不删除，彻底消除"轮换/配额"这个风险点 |
 | VERL 版本接口变动 | 改用在线方案后已**不需要手工构造 DataProto**（风险面大幅缩小）；仅剩 reward function 签名与 GRPO 配置项名需在 Phase 1 本地实测并写入 PROGRESS.md |
 | TKE GPU 机型申请审批耗时 | 已探测确认有预留空集群 `swe-rl-cluster`（ap-shanghai）可直接建节点池，无需再走新建集群审批；机型库存已确认有货 |
 | 1.5B 模型在少量 step 内 reward 上升不明显 | 在线 GRPO 下 reward 曲线本身就反映策略真实变化；若上升不明显，可提高 group_size 增强组内对比信号、或聚焦更少题目多采样。验收"提升幅度不做硬性要求" |
