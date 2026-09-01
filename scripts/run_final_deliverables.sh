@@ -33,6 +33,18 @@ CKPT="${CKPT:-}"
 
 mkdir -p docs results
 
+# 加载 .env：评测要调 AGS 沙箱执行 patch，需要 TENCENTCLOUD_SECRET_ID/KEY。
+# run_grpo_training.sh 里是 `set -a; source .env` 在 shell 层 export 的，
+# 而评测脚本此前未加载 .env，导致 _POOL.acquire() 阶段抛
+# "AGSError: 未配置 TENCENTCLOUD_SECRET_ID / TENCENTCLOUD_SECRET_KEY"。
+# 现在 eval_pass_at_1.py 内部也会自行加载，这里是双保险。
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
 log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m[warn] %s\033[0m\n' "$*"; }
 ok()   { printf '\033[1;32m[ok] %s\033[0m\n' "$*"; }
@@ -73,6 +85,20 @@ fi
 rm -f /dev/shm/nccl-* 2>/dev/null
 GPU_USED="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>/dev/null || echo 'N/A')"
 ok "显存占用：${GPU_USED}；/dev/shm：$(df -h /dev/shm 2>/dev/null | tail -1 | awk '{print $3" used"}')"
+
+# 沙箱凭证前置检查：缺了的话两个评测阶段必然失败，提前告知比跑到一半才报错好
+if [[ -n "${TENCENTCLOUD_SECRET_ID:-}" && -n "${TENCENTCLOUD_SECRET_KEY:-}" ]]; then
+  ok "沙箱凭证已就绪（SECRET_ID=${TENCENTCLOUD_SECRET_ID:0:4}...）"
+else
+  err "缺少 TENCENTCLOUD_SECRET_ID / TENCENTCLOUD_SECRET_KEY —— 评测阶段会失败"
+  warn "请确认 $(pwd)/.env 存在且含这两个变量（reward 计算需调 AGS 沙箱跑 pytest）"
+  if [[ -f .env ]]; then
+    warn ".env 存在，但未解析出凭证。文件中的 key 列表如下（值已隐藏）："
+    grep -oE '^[A-Za-z_][A-Za-z0-9_]*' .env 2>/dev/null | sed 's/^/    /'
+  else
+    warn ".env 文件不存在"
+  fi
+fi
 
 # ---------------------------------------------------------------- 1. reward 曲线
 log "阶段 1/5：生成 reward 曲线（验收第 4 条）"

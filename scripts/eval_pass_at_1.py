@@ -47,6 +47,42 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+
+def load_dotenv(path: Path | None = None) -> None:
+    """把仓库根目录 `.env` 里的键值对注入 os.environ（已存在的不覆盖）。
+
+    【为什么必需】评测要调 AGS 沙箱执行 patch，需要
+    `TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY`。这些凭证放在
+    `.env`（不入 git），`scripts/run_grpo_training.sh` 里是用 `set -a; source .env`
+    在 shell 层 export 的，但直接 `python3 scripts/eval_pass_at_1.py` 不经过那个
+    脚本，环境里就没有凭证，会在 `_POOL.acquire()` 阶段抛
+    `AGSError: 未配置 TENCENTCLOUD_SECRET_ID / TENCENTCLOUD_SECRET_KEY`。
+    因此这里在进程内自行加载，让脚本可独立运行。
+    """
+    env_path = path or (ROOT / ".env")
+    if not env_path.exists():
+        return
+    loaded: list[str] = []
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        key = key.strip()
+        # 兼容 `export KEY=value` 写法
+        if key.startswith("export "):
+            key = key[len("export "):].strip()
+        val = val.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = val
+            loaded.append(key)
+    if loaded:
+        print(f"[eval] 已从 {env_path.name} 加载 {len(loaded)} 个环境变量："
+              f"{', '.join(loaded)}", flush=True)
+
+
+load_dotenv()
+
 # 训练时使用的基座模型。LoRA checkpoint 评测时需要它作为底座叠加 adapter。
 DEFAULT_BASE_MODEL = os.environ.get(
     "BASE_MODEL_DIR", "/workspace/model/Qwen2.5-Coder-1.5B-Instruct"
@@ -251,6 +287,19 @@ def evaluate(model_path: str, tag: str, k: int, lenient: bool,
     print(f"[eval] 评测集 {len(tasks)} 题（与训练集无重叠已校验）："
           f"{[t['task_id'] for t in tasks]}", flush=True)
 
+    # 凭证前置校验：沙箱打分必需。放在加载模型（约 1 分钟）之前失败，
+    # 避免白等模型加载完才在第一次打分时报错。
+    missing = [k_ for k_ in ("TENCENTCLOUD_SECRET_ID", "TENCENTCLOUD_SECRET_KEY")
+               if not os.environ.get(k_)]
+    if missing:
+        raise SystemExit(
+            f"❌ 缺少沙箱凭证环境变量：{', '.join(missing)}\n"
+            f"   评测需要调 AGS 沙箱执行 patch 并跑 pytest。请确认 {ROOT}/.env 存在且包含：\n"
+            f"     TENCENTCLOUD_SECRET_ID=...\n"
+            f"     TENCENTCLOUD_SECRET_KEY=...\n"
+            f"   或在当前 shell 里先 export 这两个变量。"
+        )
+
     fc_path = ROOT / "data" / "file_contents.json"
     file_contents: dict[str, str] = {}
     if fc_path.exists():
@@ -271,13 +320,24 @@ def evaluate(model_path: str, tag: str, k: int, lenient: bool,
         )
         for attempt in range(k):
             t0 = time.time()
-            solution = gen.generate(build_messages(task, file_contents))
-            reward = compute_score(
-                data_source="swe_rl",
-                solution_str=solution,
-                ground_truth=ground_truth,
-                extra_info={"task_id": tid},
-            )
+            # 单题失败不应中断整场评测（沙箱可能偶发超时/实例异常），
+            # 记为 reward=0 并标注 error，最后在摘要里报告失败题数。
+            err_msg = ""
+            try:
+                solution = gen.generate(build_messages(task, file_contents))
+                reward = compute_score(
+                    data_source="swe_rl",
+                    solution_str=solution,
+                    ground_truth=ground_truth,
+                    extra_info={"task_id": tid},
+                )
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:  # noqa: BLE001
+                solution = ""
+                reward = 0.0
+                err_msg = f"{type(e).__name__}: {e}"
+                print(f"  ⚠️ {tid} #{attempt} 评测异常：{err_msg}", flush=True)
             # reward = APPLY_BONUS + TEST_WEIGHT × 测试分，反解出纯测试分
             from pipeline.verl_reward_fn import APPLY_SUCCESS_BONUS, TEST_WEIGHT
             test_score = max(0.0, (reward - APPLY_SUCCESS_BONUS) / TEST_WEIGHT) \
@@ -292,6 +352,7 @@ def evaluate(model_path: str, tag: str, k: int, lenient: bool,
                 "partial_pass": bool(test_score > 0),
                 "elapsed_s": round(time.time() - t0, 1),
                 "solution_len": len(solution),
+                "error": err_msg,
             }
             records.append(rec)
             print(f"  {tid} #{attempt}: reward={rec['reward']} "
@@ -323,6 +384,7 @@ def evaluate(model_path: str, tag: str, k: int, lenient: bool,
         "mean_test_score": round(sum(r["test_score"] for r in records) / len(records), 4)
                            if records else 0.0,
         "total_elapsed_s": round(time.time() - t_start, 1),
+        "n_errors": sum(1 for r in records if r.get("error")),
         "records": records,
     }
 
@@ -336,6 +398,9 @@ def evaluate(model_path: str, tag: str, k: int, lenient: bool,
           f"（{partial_solved}/{n_task} 题至少修好 1 个 F2P 用例）")
     print(f"  patch 可应用率  : {summary['apply_rate']} （{applied_any}/{n_task} 题）")
     print(f"  平均 reward     : {summary['mean_reward']}")
+    if summary["n_errors"]:
+        print(f"  ⚠️ 异常样本     : {summary['n_errors']}/{len(records)}"
+              f"（已记为 reward=0，详见 records[].error）")
     return summary
 
 
