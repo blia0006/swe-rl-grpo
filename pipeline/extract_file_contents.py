@@ -80,12 +80,26 @@ def main() -> int:
 
             for fpath in modified_files:
                 full_path = f"{REPO_DIR_IN_SANDBOX}/{fpath}"
+                content = None
+
+                # 主路径：files.read（必须 user="root"，镜像里没有 "user" 用户）
                 try:
-                    content = sbx.files.read(full_path)
+                    content = sbx.files.read(full_path, user="root")
+                except Exception as e1:
+                    # 兜底路径：用 cat 读（更底层，绕开 SDK 的 user 处理）
+                    try:
+                        r = sbx.commands.run(f"cat {full_path}", user="root", timeout=60)
+                        content = r.stdout
+                    except Exception as e2:
+                        print(f"  ✗ {fpath} - files.read: {e1} | cat: {e2}")
+                        failed.append(f"{tid}:{fpath}")
+                        continue
+
+                if content:
                     results[f"{tid}:{fpath}"] = content
                     print(f"  ✓ {fpath} ({len(content)} bytes)")
-                except Exception as e:
-                    print(f"  ✗ {fpath} - {e}")
+                else:
+                    print(f"  ✗ {fpath} - 读到空内容")
                     failed.append(f"{tid}:{fpath}")
         except Exception as e:
             print(f"  ✗ 起沙箱失败: {e}")
