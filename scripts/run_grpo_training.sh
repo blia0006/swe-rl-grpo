@@ -38,6 +38,9 @@ REWARD_FN="$(pwd)/pipeline/verl_reward_fn.py"
 OUTPUT_DIR="${OUTPUT_DIR:-/workspace/checkpoints/swe-rl-grpo}"
 mkdir -p "$OUTPUT_DIR"
 
+# reward function 调试日志：打印每次打分的 patch_head（诊断 patch 格式问题用）
+export REWARD_DEBUG_LOG=1
+
 # --- 5090 不需要任何源码 patch，直接跑 verl 0.6.1 的标准 GRPO 训练。
 #     注意几个 5090/verl0.6.1 特有的配置项：
 #       - actor.strategy=fsdp          （0.6.1 新增必需项）
@@ -71,7 +74,7 @@ python3 -m verl.trainer.main_ppo \
   actor_rollout_ref.actor.use_kl_loss=True \
   actor_rollout_ref.actor.kl_loss_coef=0.001 \
   actor_rollout_ref.actor.use_torch_compile=False \
-  actor_rollout_ref.actor.fsdp_config.model_dtype=bf16 \
+  actor_rollout_ref.actor.fsdp_config.model_dtype=bfloat16 \
   actor_rollout_ref.actor.fsdp_config.fsdp_size=1 \
   actor_rollout_ref.actor.fsdp_config.use_orig_params=True \
   actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
@@ -82,7 +85,7 @@ python3 -m verl.trainer.main_ppo \
   actor_rollout_ref.rollout.mode=sync \
   actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
   actor_rollout_ref.rollout.gpu_memory_utilization=0.5 \
-  actor_rollout_ref.rollout.dtype=bf16 \
+  actor_rollout_ref.rollout.dtype=bfloat16 \
   actor_rollout_ref.rollout.temperature=0.8 \
   actor_rollout_ref.rollout.top_p=0.95 \
   actor_rollout_ref.rollout.top_k=-1 \
