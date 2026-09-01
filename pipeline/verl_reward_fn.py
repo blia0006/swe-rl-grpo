@@ -282,34 +282,43 @@ def _sbx_run(sbx, cmd: str, timeout: int = 30, envs: dict | None = None) -> tupl
 # 前两类**纯粹是算术/格式问题，与修复逻辑对不对无关**：模型可能已经改对了代码，
 # 只因数不清行数就被判 0。`git apply --recount` 正是为"手写 patch 行数不准"设计的，
 # 会忽略 header 里的计数、按 hunk body 实际内容重新推算；`-C1` 放宽上下文匹配到
-# 1 行；`patch -p1 --fuzz=3` 允许上下文模糊匹配。
+# 1 行；`--unidiff-zero` 容忍零上下文 hunk；`-C0` 完全不校验上下文（最宽松，仅
+# 依赖行号定位）。
 # 【是否算作弊】不算：放宽的只是 diff 的**格式容错**，代码改动内容本身分毫未变，
 # 最终仍由 verify.sh 跑真实测试判定对错，防 reward-hacking 的 P2P 规则也完整保留。
 # 可用 REWARD_STRICT_APPLY=1 关掉级联，退回单一严格模式做对照实验。
+# 注意：GNU `patch` 命令**不在沙箱镜像里**（实测 `patch: command not found`），
+# 因此级联只用 git 自带能力，不依赖任何需要额外安装的工具。
 _APPLY_STRATEGIES: list[tuple[str, str]] = [
     ("strict", "git apply --whitespace=nowarn {p}"),
     ("recount", "git apply --recount --whitespace=nowarn {p}"),
     ("recount+C1", "git apply --recount -C1 --unidiff-zero --whitespace=nowarn {p}"),
-    ("patch-fuzz", "patch -p1 --fuzz=3 --no-backup-if-mismatch -i {p}"),
+    ("recount+C0", "git apply --recount -C0 --unidiff-zero --whitespace=nowarn {p}"),
 ]
 
 
 def _apply_patch(sbx, patch_path: str) -> tuple[bool, str, str]:
     """按 `_APPLY_STRATEGIES` 顺序尝试应用 patch。
 
-    返回 (是否成功, 生效的策略名, 最后一次失败的 stderr)。
+    返回 (是否成功, 生效的策略名, 用于诊断的失败 stderr)。
+
+    失败信息取**第一个策略（strict）**的 stderr 而非最后一个：strict 的报错
+    （`corrupt patch at line N` 等）才真实反映模型输出的问题，后续宽松策略的
+    报错要么重复、要么是工具本身的噪音（如某个 git 版本不支持某选项），
+    会把真正的诊断信息覆盖掉。
     """
     strategies = _APPLY_STRATEGIES
     if os.environ.get("REWARD_STRICT_APPLY"):
         strategies = _APPLY_STRATEGIES[:1]
 
-    last_err = ""
-    for name, tmpl in strategies:
+    first_err = ""
+    for idx, (name, tmpl) in enumerate(strategies):
         code, _out, err = _sbx_run(sbx, f"cd {REPO_DIR} && " + tmpl.format(p=patch_path))
         if code == 0:
             return True, name, ""
-        last_err = err.strip()
-    return False, "", last_err
+        if idx == 0:
+            first_err = err.strip()
+    return False, "", first_err
 
 
 def _score_via_sandbox_once(task_id: str, image: str, patch: str, expected_repo: str = "") -> tuple[float, str]:
