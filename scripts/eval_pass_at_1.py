@@ -275,8 +275,6 @@ def build_messages(task: dict, file_contents: dict[str, str]) -> list[dict]:
 
 def evaluate(model_path: str, tag: str, k: int, lenient: bool,
              temperature: float, base_model: str | None = None) -> dict:
-    from pipeline.verl_reward_fn import compute_score
-
     # 严格 apply：评测衡量真实能力，不用训练期的格式容错级联
     if lenient:
         os.environ.pop("REWARD_STRICT_APPLY", None)
@@ -314,22 +312,21 @@ def evaluate(model_path: str, tag: str, k: int, lenient: bool,
     t_start = time.time()
     for task in tasks:
         tid = task["task_id"]
-        ground_truth = json.dumps(
-            {"task_id": tid, "image": task["image"], "repo": task.get("repo", "")},
-            ensure_ascii=False,
-        )
         for attempt in range(k):
             t0 = time.time()
             # 单题失败不应中断整场评测（沙箱可能偶发超时/实例异常），
             # 记为 reward=0 并标注 error，最后在摘要里报告失败题数。
             err_msg = ""
+            reason = ""
             try:
                 solution = gen.generate(build_messages(task, file_contents))
-                reward = compute_score(
-                    data_source="swe_rl",
-                    solution_str=solution,
-                    ground_truth=ground_truth,
-                    extra_info={"task_id": tid},
+                # 直接调 _score_via_sandbox 而非 compute_score，为了拿到 reason
+                # ——全 0 结果下，"为什么是 0"（corrupt patch / 没抽到 patch /
+                # 沙箱异常）才是唯一有诊断价值的信息，只记 reward=0 等于丢掉证据。
+                from pipeline.verl_reward_fn import _score_via_sandbox, extract_patch
+                patch = extract_patch(solution)
+                reward, reason = _score_via_sandbox(
+                    tid, task["image"], patch, task.get("repo", "")
                 )
             except KeyboardInterrupt:
                 raise
@@ -352,12 +349,15 @@ def evaluate(model_path: str, tag: str, k: int, lenient: bool,
                 "partial_pass": bool(test_score > 0),
                 "elapsed_s": round(time.time() - t0, 1),
                 "solution_len": len(solution),
+                "reason": reason[:300],
                 "error": err_msg,
             }
             records.append(rec)
             print(f"  {tid} #{attempt}: reward={rec['reward']} "
                   f"test={rec['test_score']} applied={rec['applied']} "
                   f"strict_pass={rec['strict_pass']} ({rec['elapsed_s']}s)", flush=True)
+            if reason and not rec["applied"]:
+                print(f"      原因: {reason[:160]}", flush=True)
 
     n_task = len(tasks)
     # pass@1：每题只要有任一次尝试成功即算该题通过（k=1 时就是标准 pass@1）

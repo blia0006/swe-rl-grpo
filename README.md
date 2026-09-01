@@ -434,20 +434,66 @@ bash scripts/run_final_deliverables.sh      # 一键跑完出图 + 前后评估 
 
 - 评测集 4 题，与训练集**严格不重叠**（启动即强制校验，见 §3.2）
 - 复用训练时**同一套** prompt 构造与打分链路，口径一致
-- `temperature=0` 贪心解码，保证可复现
-- **默认严格 apply**（`REWARD_STRICT_APPLY=1`）：级联容错是训练期 shaping 手段，
-  衡量真实能力必须用未放宽标准
 - 同时报两个口径，避免只报有利数据：
   - `strict_pass`：F2P 全绿且无 P2P 回归
   - `partial_pass`：至少修好一个 F2P 用例
 
-结果见 `results/comparison.md`（含逐题明细）。
+#### 7.4.1 严格口径结果：双方全 0，且这个结果不携带信息
 
-> **LoRA checkpoint 的一个坑**：VERL 存下的 `global_step_55/actor/huggingface/` 目录里
-> **只有 `config.json` 和 tokenizer，没有任何权重文件**，训练学到的增量全在
-> `actor/lora_adapter/`。若按常规做法把该目录当模型路径加载，transformers 会加载到
-> 未训练的权重且**不报错**，"训练后 pass@1" 就成了假数据。`eval_pass_at_1.py` 因此会校验
-> 权重文件是否真实存在，识别出 LoRA 场景时用 `base + PeftModel` 叠加 adapter 后 merge。
+第一组评测用严格 apply（`REWARD_STRICT_APPLY=1`，只用 `git apply`）+ `k=1` + 贪心解码，
+结果 base 与训练后**全部为 0**（`results/comparison.md`）：
+
+| 指标 | 训练前 | 训练后 | 变化 |
+|---|---|---|---|
+| pass@1 (strict) | 0.0000 | 0.0000 | — |
+| patch 可应用率 | 0.0000 | 0.0000 | — |
+
+**必须指出：这个全 0 对比在统计上是必然的，既不能证明有提升，也不能证明无提升。**
+理由是本次评测设置没有统计功效：
+
+§7.2 实测 `strict` 模式 apply 成功率为 **8/440 = 1.8%**，而该组只有 4 题 × k=1 = **4 个采样**，
+
+$$\mathbb{E}[\text{成功次数}] = 4 \times 1.8\% = 0.07$$
+
+期望成功次数连 0.1 都不到 —— 也就是说，**即便模型能力真有提升，这个设置下也几乎必然观测到 0**。
+把这张全 0 表当作"训练无效"的证据是错误的推断。
+
+#### 7.4.2 高灵敏度对照组：lenient + k=8 + T=0.8
+
+因此追加一组有区分度的设置（`results/comparison_lenient.md`）：
+
+| 设置 | 严格组 | 高灵敏度组 | 理由 |
+|---|---|---|---|
+| apply 口径 | strict（1.8% 成功率） | **lenient 级联**（34.5%） | 与训练时一致 |
+| 每题采样 k | 1 | **8** | 与训练 `rollout.n=8` 一致 |
+| 温度 | 0（贪心） | **0.8** | 与训练采样温度一致，避免只探到单一模式 |
+| 总采样数 | 4 | **32** | 期望成功约 11 次，足以体现差异 |
+
+**两组都如实保留，各自回答不同的问题**：
+
+- **严格组** → "模型的绝对可交付能力如何" → 答案是**接近 0**，1.5B 在此任务上尚不具备
+  产出可直接应用的规范 diff 的能力
+- **高灵敏度组** → "训练是否让模型学到了东西" → 见 `results/comparison_lenient.md`
+
+这种"双口径报告"比只报一组更诚实：既不用宽松口径掩盖真实能力不足，也不用严格口径下的
+零功效结果误判训练无效。
+
+#### 7.4.3 评测脚本的两个必要设计
+
+**（1）LoRA checkpoint 的静默陷阱。** VERL 存下的 `global_step_55/actor/huggingface/` 目录里
+**只有 `config.json` 和 tokenizer，没有任何权重文件**，训练学到的增量全在 `actor/lora_adapter/`。
+若按常规做法把该目录当模型路径加载，transformers 会加载到未训练的权重且**不报错**，
+"训练后 pass@1" 就成了假数据。脚本因此会校验权重文件是否真实存在，识别出 LoRA 场景时用
+`base + PeftModel` 叠加 adapter 后 `merge_and_unload()`。实际运行日志可验证这一分支正确工作：
+
+```
+[eval] base  → 未检测到 LoRA adapter，按全量权重评测
+[eval] after  → 叠加 LoRA adapter → LoRA 已合并进基座权重
+```
+
+**（2）全 0 结果必须记录失败原因。** 只记 `reward=0` 等于丢掉全部证据。脚本改为直接调
+`_score_via_sandbox()` 以取回 `reason` 字段（`corrupt patch` / `没抽到 patch` / 沙箱异常等），
+写入 `records[].reason`，这样即使结果全 0 也能定位到具体是哪一层失败。
 
 ---
 
@@ -460,7 +506,7 @@ bash scripts/run_final_deliverables.sh      # 一键跑完出图 + 前后评估 
 | 3 | TKE GPU 上 VERL 可运行，训练 ≥50 step | ✅ | **55/55 步**，0 报错 |
 | 4 | reward 曲线呈上升趋势 | ⚠️ **未达成** | 图见 `docs/reward_curve.png`；U 型，根因分析见 §7.3 |
 | 5 | ≥1 轮完整闭环 | ✅ | `scripts/run_final_deliverables.sh` → `results/` |
-| 6 | 训练后 pass@1 有对比数据 | ✅ | `results/comparison.md` |
+| 6 | 训练后 pass@1 有对比数据 | ✅ | `results/comparison.md`（严格口径）+ `results/comparison_lenient.md`（高灵敏度口径），双口径如实报告，见 §7.4 |
 | 7 | README（环境/部署/选型/超参/结果分析） | ✅ | 本文档 |
 
 ---

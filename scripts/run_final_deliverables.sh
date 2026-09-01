@@ -54,6 +54,9 @@ STATUS_PLOT="未执行"
 STATUS_BEFORE="未执行"
 STATUS_AFTER="未执行"
 STATUS_CMP="未执行"
+STATUS_BEFORE_L="未执行"
+STATUS_AFTER_L="未执行"
+STATUS_CMP_L="未执行"
 
 # ---------------------------------------------------------------- 0. 环境自愈
 log "阶段 0/5：环境准备"
@@ -163,7 +166,7 @@ else
 fi
 
 # ---------------------------------------------------------------- 5. 对比
-log "阶段 5/5：生成训练前后对比表格（验收第 6 条）"
+log "阶段 5/7：生成训练前后对比表格 · 严格口径（验收第 6 条）"
 if [[ -f results/eval_before.json && -f results/eval_after.json ]]; then
   if python3 scripts/eval_pass_at_1.py --compare \
         results/eval_before.json results/eval_after.json \
@@ -178,12 +181,63 @@ else
   warn "需要 results/eval_before.json 与 results/eval_after.json 都存在"
 fi
 
+# ---------------------------------------------------------------- 6-7. 高灵敏度对照组
+# 【为什么必须补这一组】严格口径 + k=1 在本课题下没有统计功效：
+# 训练日志实测 strict apply 成功率仅 8/440 = 1.8%，评测 4 题 × k=1 = 4 个采样，
+# 期望成功次数 = 4 × 1.8% = 0.07 —— 期望值连 0.1 都不到，**双方全 0 是统计必然**，
+# 既不能证明有提升也不能证明无提升，该对比表实际上不携带任何信息。
+# 因此追加一组高灵敏度设置：
+#   --lenient  用与训练一致的 apply 级联口径（实测成功率 34.5%）
+#   -k 8       每题采样 8 次，与训练时 rollout.n=8 一致
+#   温度 0.8   与训练采样温度一致，避免贪心解码只探到单一模式
+# 4 题 × 8 次 = 32 采样，期望成功约 11 次，才足以体现训练前后差异。
+# 两组结果都如实保留：严格组反映"真实可交付能力"，宽松组反映"训练是否学到东西"。
+if [[ "${SKIP_SENSITIVE:-0}" != "1" ]]; then
+  log "阶段 6/7：高灵敏度评测 · base（lenient + k=8 + T=0.8）"
+  if [[ -d "$BASE_MODEL" ]]; then
+    python3 scripts/eval_pass_at_1.py --model "$BASE_MODEL" \
+      --tag before_lenient --lenient -k 8 --temperature 0.8 \
+      --out results/eval_before_lenient.json \
+      && STATUS_BEFORE_L="成功" || STATUS_BEFORE_L="失败"
+  else
+    STATUS_BEFORE_L="跳过（基座模型不存在）"
+  fi
+
+  log "阶段 7/7：高灵敏度评测 · 训练后（lenient + k=8 + T=0.8）"
+  if [[ -n "$CKPT" && -d "$CKPT" ]]; then
+    python3 scripts/eval_pass_at_1.py --model "$CKPT" --base-model "$BASE_MODEL" \
+      --tag after_lenient --lenient -k 8 --temperature 0.8 \
+      --out results/eval_after_lenient.json \
+      && STATUS_AFTER_L="成功" || STATUS_AFTER_L="失败"
+  else
+    STATUS_AFTER_L="跳过（无 checkpoint）"
+  fi
+
+  if [[ -f results/eval_before_lenient.json && -f results/eval_after_lenient.json ]]; then
+    log "生成高灵敏度对比表格"
+    python3 scripts/eval_pass_at_1.py --compare \
+      results/eval_before_lenient.json results/eval_after_lenient.json \
+      | tee results/comparison_lenient.md \
+      && { STATUS_CMP_L="成功"; ok "对比表格：results/comparison_lenient.md"; } \
+      || STATUS_CMP_L="失败"
+  else
+    STATUS_CMP_L="跳过（缺少高灵敏度评测结果）"
+  fi
+else
+  STATUS_BEFORE_L="跳过（SKIP_SENSITIVE=1）"
+  STATUS_AFTER_L="$STATUS_BEFORE_L"
+  STATUS_CMP_L="$STATUS_BEFORE_L"
+fi
+
 # ---------------------------------------------------------------- 汇总
 log "全部阶段汇总"
-printf '  %-28s %s\n' "reward 曲线（第4条）"      "$STATUS_PLOT"
-printf '  %-28s %s\n' "base pass@1（第5条）"      "$STATUS_BEFORE"
-printf '  %-28s %s\n' "训练后 pass@1（第5条）"    "$STATUS_AFTER"
-printf '  %-28s %s\n' "前后对比表格（第6条）"     "$STATUS_CMP"
+printf '  %-34s %s\n' "reward 曲线（第4条）"            "$STATUS_PLOT"
+printf '  %-34s %s\n' "base pass@1 · strict（第5条）"    "$STATUS_BEFORE"
+printf '  %-34s %s\n' "训练后 pass@1 · strict（第5条）"  "$STATUS_AFTER"
+printf '  %-34s %s\n' "前后对比 · strict（第6条）"       "$STATUS_CMP"
+printf '  %-34s %s\n' "base pass@1 · lenient k=8"       "$STATUS_BEFORE_L"
+printf '  %-34s %s\n' "训练后 pass@1 · lenient k=8"     "$STATUS_AFTER_L"
+printf '  %-34s %s\n' "前后对比 · lenient k=8"          "$STATUS_CMP_L"
 echo
 echo "产出文件："
 ls -la docs/reward_curve.png docs/reward_curve.csv \
