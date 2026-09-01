@@ -218,11 +218,12 @@ def _repo_content_matches(sbx, expected_repo: str) -> bool:
     """
     expect = expected_repo.split("/")[-1].lower()
     try:
-        r = sbx.commands.run(
+        _code, out, _err = _sbx_run(
+            sbx,
             f"grep -m1 '^name' {REPO_DIR}/pyproject.toml 2>/dev/null || true",
-            user="root", timeout=15,
+            timeout=15,
         )
-        pkgname = (r.stdout or "").strip().lower()
+        pkgname = out.strip().lower()
     except Exception:  # noqa: BLE001
         return True
     if not pkgname:
@@ -250,6 +251,67 @@ def _score_via_sandbox(task_id: str, image: str, patch: str, expected_repo: str 
     return 0.0, f"{last_reason}（已重试 {_CONTENT_MISMATCH_MAX_RETRY} 次仍失败）"
 
 
+def _sbx_run(sbx, cmd: str, timeout: int = 30, envs: dict | None = None) -> tuple[int, str, str]:
+    """执行沙箱命令，返回 (exit_code, stdout, stderr)，**不抛异常**。
+
+    e2b SDK 的 `commands.run` 在命令退出码非 0 时会直接 raise
+    `CommandExitException`（而不是返回带 exit_code 的结果对象），导致调用方
+    `if res.exit_code != 0` 这类判断永远走不到，所有命令失败都被外层
+    `except` 兜成"沙箱调用异常"——把**模型输出不合法**误分类成**基础设施故障**
+    （实测 78/79 次 `git apply` 失败全被误报为沙箱异常，失败归因完全失真）。
+
+    本函数把退出码异常收敛成正常返回值，只有真正的连接/超时类异常才向上抛。
+    """
+    try:
+        res = sbx.commands.run(cmd, user="root", timeout=timeout, envs=envs or {})
+        return res.exit_code, (res.stdout or ""), (res.stderr or "")
+    except Exception as e:  # noqa: BLE001
+        # CommandExitException 带 exit_code/stdout/stderr 属性，说明命令确实执行了
+        # 只是退出码非 0，属于"业务失败"，收敛为返回值
+        code = getattr(e, "exit_code", None)
+        if code is None:
+            raise  # 连接失败/超时等真实基础设施异常，交给外层处理
+        return int(code), str(getattr(e, "stdout", "") or ""), str(getattr(e, "stderr", "") or str(e))
+
+
+# patch 应用策略级联：从最严格到最宽松，任一成功即视为 apply 成功。
+# 【为什么需要级联】实测 1.5B 模型失败原因分布（78 次采样）：
+#   corrupt patch at line N        → hunk header 里的行数 `@@ -X,Y +A,B @@` 算错
+#   patch fragment without header  → hunk 头缺失或错乱
+#   patch does not apply           → 上下文行对不上
+# 前两类**纯粹是算术/格式问题，与修复逻辑对不对无关**：模型可能已经改对了代码，
+# 只因数不清行数就被判 0。`git apply --recount` 正是为"手写 patch 行数不准"设计的，
+# 会忽略 header 里的计数、按 hunk body 实际内容重新推算；`-C1` 放宽上下文匹配到
+# 1 行；`patch -p1 --fuzz=3` 允许上下文模糊匹配。
+# 【是否算作弊】不算：放宽的只是 diff 的**格式容错**，代码改动内容本身分毫未变，
+# 最终仍由 verify.sh 跑真实测试判定对错，防 reward-hacking 的 P2P 规则也完整保留。
+# 可用 REWARD_STRICT_APPLY=1 关掉级联，退回单一严格模式做对照实验。
+_APPLY_STRATEGIES: list[tuple[str, str]] = [
+    ("strict", "git apply --whitespace=nowarn {p}"),
+    ("recount", "git apply --recount --whitespace=nowarn {p}"),
+    ("recount+C1", "git apply --recount -C1 --unidiff-zero --whitespace=nowarn {p}"),
+    ("patch-fuzz", "patch -p1 --fuzz=3 --no-backup-if-mismatch -i {p}"),
+]
+
+
+def _apply_patch(sbx, patch_path: str) -> tuple[bool, str, str]:
+    """按 `_APPLY_STRATEGIES` 顺序尝试应用 patch。
+
+    返回 (是否成功, 生效的策略名, 最后一次失败的 stderr)。
+    """
+    strategies = _APPLY_STRATEGIES
+    if os.environ.get("REWARD_STRICT_APPLY"):
+        strategies = _APPLY_STRATEGIES[:1]
+
+    last_err = ""
+    for name, tmpl in strategies:
+        code, _out, err = _sbx_run(sbx, f"cd {REPO_DIR} && " + tmpl.format(p=patch_path))
+        if code == 0:
+            return True, name, ""
+        last_err = err.strip()
+    return False, "", last_err
+
+
 def _score_via_sandbox_once(task_id: str, image: str, patch: str, expected_repo: str = "") -> tuple[float, str]:
     """借实例 → 还原干净态（tar 快照）→ apply patch → verify.sh → 判分 → 还实例。
 
@@ -275,47 +337,31 @@ def _score_via_sandbox_once(task_id: str, image: str, patch: str, expected_repo:
             )
 
         if reused:
-            restore = sbx.commands.run(
-                f"rm -rf {REPO_DIR} && tar xzf {PRISTINE_SNAPSHOT} -C /",
-                user="root", timeout=30,
-            )
-            if restore.exit_code != 0:
+            r_code, _o, _e = _sbx_run(sbx, f"rm -rf {REPO_DIR} && tar xzf {PRISTINE_SNAPSHOT} -C /")
+            if r_code != 0:
                 broken = True
-                return 0.0, f"实例还原失败（exit={restore.exit_code}），已丢弃该实例"
+                return 0.0, f"实例还原失败（exit={r_code}），已丢弃该实例"
         else:
-            snapshot = sbx.commands.run(
-                f"tar czf {PRISTINE_SNAPSHOT} -C / workspace/repo",
-                user="root", timeout=30,
-            )
-            if snapshot.exit_code != 0:
+            s_code, _o, _e = _sbx_run(sbx, f"tar czf {PRISTINE_SNAPSHOT} -C / workspace/repo")
+            if s_code != 0:
                 broken = True
-                return 0.0, f"建立 pristine 快照失败（exit={snapshot.exit_code}），已丢弃该实例"
+                return 0.0, f"建立 pristine 快照失败（exit={s_code}），已丢弃该实例"
 
         if patch.strip():
             patch_content = patch if patch.endswith("\n") else patch + "\n"
             sbx.files.write("/tmp/reward.patch", patch_content, user="root")
-            apply_res = sbx.commands.run(
-                f"cd {REPO_DIR} && git apply --whitespace=nowarn /tmp/reward.patch",
-                user="root", timeout=30,
-            )
-            if apply_res.exit_code != 0:
+            ok, strategy, apply_err = _apply_patch(sbx, "/tmp/reward.patch")
+            if not ok:
                 # patch 应用失败视为模型这次生成无效，判 0，不算基础设施错误，
                 # 实例本身仍是干净可复用的（apply 失败不会改动仓库）
-                return 0.0, f"patch 应用失败（模型输出的 diff 不合法）：{(apply_res.stderr or '')[:300]}"
+                return 0.0, f"patch 应用失败（模型输出的 diff 不合法）：{apply_err[:300]}"
         else:
             return 0.0, "solution_str 中未抽取到有效 patch"
 
-        try:
-            verify_res = sbx.commands.run(
-                f"cd {REPO_DIR} && bash /task/verify.sh",
-                user="root", timeout=VERIFY_TIMEOUT_SEC,
-                envs={"PYTEST_ADDOPTS": "--color=no"},
-            )
-        except Exception:
-            # verify.sh 判不通过时退出码非 0，SDK 默认对非 0 退出码抛异常
-            # （Phase 1.5 真实沙箱实测确认），这里吞掉异常继续读 result.json，
-            # 用文件内容而非退出码判断，退出码只用于日志。
-            pass
+        # verify.sh 判不通过时退出码非 0，不代表基础设施故障，
+        # 统一用 result.json 的内容判分，退出码只用于日志。
+        _sbx_run(sbx, f"cd {REPO_DIR} && bash /task/verify.sh",
+                 timeout=VERIFY_TIMEOUT_SEC, envs={"PYTEST_ADDOPTS": "--color=no"})
 
         try:
             result_raw = sbx.files.read("/task/result.json", user="root")
@@ -334,7 +380,7 @@ def _score_via_sandbox_once(task_id: str, image: str, patch: str, expected_repo:
         # 课题要求的 `fail→pass / 总数` 仍占主体权重（TEST_WEIGHT=0.8）。
         final_reward = APPLY_SUCCESS_BONUS + TEST_WEIGHT * rr.reward
         return final_reward, (
-            f"[apply成功+{APPLY_SUCCESS_BONUS}] {rr.reason}"
+            f"[apply成功({strategy})+{APPLY_SUCCESS_BONUS}] {rr.reason}"
             f"（测试分 {rr.reward:.3f}×{TEST_WEIGHT} → 合计 {final_reward:.3f}）"
         )
     except Exception as e:  # noqa: BLE001
