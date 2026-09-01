@@ -47,6 +47,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# 训练时使用的基座模型。LoRA checkpoint 评测时需要它作为底座叠加 adapter。
+DEFAULT_BASE_MODEL = os.environ.get(
+    "BASE_MODEL_DIR", "/workspace/model/Qwen2.5-Coder-1.5B-Instruct"
+)
+
 
 # --------------------------------------------------------------- 评测集加载与校验
 
@@ -92,7 +97,7 @@ class HFGenerator:
     """
 
     def __init__(self, model_path: str, max_new_tokens: int = 1024,
-                 temperature: float = 0.0):
+                 temperature: float = 0.0, base_model: str | None = None):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -100,34 +105,106 @@ class HFGenerator:
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
 
-        resolved = self._resolve_model_dir(model_path)
-        print(f"[eval] 加载模型：{resolved}", flush=True)
-        self.tokenizer = AutoTokenizer.from_pretrained(resolved, trust_remote_code=True)
+        weights_dir, lora_dir = self._resolve_model_dir(model_path, base_model)
+
+        print(f"[eval] 加载基座权重：{weights_dir}", flush=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(weights_dir, trust_remote_code=True)
         self.model = AutoModelForCausalLM.from_pretrained(
-            resolved,
+            weights_dir,
             torch_dtype=torch.bfloat16,
             trust_remote_code=True,
         ).to("cuda").eval()
+
+        if lora_dir:
+            # 【为什么必须这样加载】本课题用 LoRA 训练（lora_rank=16），VERL 的
+            # checkpoint 里 `actor/huggingface/` 只有 config.json + tokenizer，
+            # **不含任何权重文件**；训练学到的增量全部在 `actor/lora_adapter/`。
+            # 若直接把 `actor/huggingface/` 当模型目录加载，transformers 会因缺
+            # 权重而随机初始化（或报错），评测到的根本不是训练后的模型，
+            # 训练前后对比数据会完全失真——这是必须避免的静默错误。
+            try:
+                from peft import PeftModel
+            except ImportError:
+                raise SystemExit(
+                    "❌ 需要 peft 才能加载 LoRA adapter：pip install peft"
+                ) from None
+            print(f"[eval] 叠加 LoRA adapter：{lora_dir}", flush=True)
+            self.model = PeftModel.from_pretrained(
+                self.model, lora_dir, torch_dtype=torch.bfloat16
+            )
+            # merge 后推理更快，且避免 PeftModel 包装层影响 generate 行为
+            self.model = self.model.merge_and_unload().eval()
+            print("[eval] LoRA 已合并进基座权重", flush=True)
+        else:
+            print("[eval] 未检测到 LoRA adapter，按全量权重评测", flush=True)
+
         print("[eval] 模型加载完成", flush=True)
 
     @staticmethod
-    def _resolve_model_dir(model_path: str) -> str:
-        """兼容 VERL checkpoint 目录结构。
+    def _has_weights(d: Path) -> bool:
+        """判断目录内是否真的有模型权重文件（而非只有 config/tokenizer）。"""
+        if not d.is_dir():
+            return False
+        pats = ("*.safetensors", "*.bin", "*.pt", "*.pth")
+        return any(any(d.glob(p)) for p in pats)
 
-        VERL 保存的目录形如 `global_step_55/actor/huggingface/`，直接传
-        `global_step_55` 会找不到 config.json，这里自动向下探一层。
+    @classmethod
+    def _resolve_model_dir(cls, model_path: str,
+                           base_model: str | None) -> tuple[str, str | None]:
+        """解析模型路径，返回 (基座权重目录, LoRA adapter 目录或 None)。
+
+        兼容三种情况：
+          1) 普通 HF 目录（有 config.json + 权重文件）→ 直接用
+          2) VERL LoRA checkpoint：`global_step_N/actor/` 下有 `lora_adapter/`，
+             而 `huggingface/` 只有 config + tokenizer 无权重
+             → 基座取 --base-model（或默认的训练基座），adapter 单独返回
+          3) VERL 全量 checkpoint：`actor/huggingface/` 含权重 → 直接用
         """
         p = Path(model_path)
-        if (p / "config.json").exists():
-            return str(p)
-        for cand in (p / "actor" / "huggingface", p / "huggingface", p / "actor"):
-            if (cand / "config.json").exists():
-                print(f"[eval] 自动定位到 HF 权重目录：{cand}", flush=True)
-                return str(cand)
+        if not p.exists():
+            raise SystemExit(f"❌ 路径不存在：{p}")
+
+        # 情况 1：本身就是完整 HF 目录
+        if (p / "config.json").exists() and cls._has_weights(p):
+            return str(p), None
+
+        # 找 LoRA adapter
+        lora_dir: str | None = None
+        for cand in (p / "actor" / "lora_adapter", p / "lora_adapter"):
+            if (cand / "adapter_config.json").exists() or cls._has_weights(cand):
+                lora_dir = str(cand)
+                break
+
+        # 找含权重的 HF 目录
+        hf_dir: str | None = None
+        for cand in (p, p / "actor" / "huggingface", p / "huggingface"):
+            if (cand / "config.json").exists() and cls._has_weights(cand):
+                hf_dir = str(cand)
+                break
+
+        if lora_dir and not hf_dir:
+            # LoRA 训练场景：必须显式提供基座
+            base = base_model or DEFAULT_BASE_MODEL
+            if not (Path(base) / "config.json").exists():
+                raise SystemExit(
+                    f"❌ 检测到 LoRA adapter（{lora_dir}），但找不到基座模型。\n"
+                    f"   请用 --base-model 指定训练时的基座权重目录。\n"
+                    f"   已尝试：{base}"
+                )
+            return base, lora_dir
+
+        if hf_dir:
+            return hf_dir, lora_dir
+
+        # 都没找到，把目录结构打出来便于排查
+        listing: list[str] = []
+        for sub in (p, p / "actor"):
+            if sub.is_dir():
+                listing.append(f"{sub}: {sorted(x.name for x in sub.iterdir())}")
         raise SystemExit(
-            f"❌ 在 {model_path} 下找不到 config.json。\n"
-            f"   VERL checkpoint 需要先转成 HF 格式，或指定到含 config.json 的子目录。\n"
-            f"   目录内容：{[x.name for x in p.iterdir()] if p.is_dir() else '路径不存在'}"
+            f"❌ 在 {model_path} 下找不到可用的模型权重。\n"
+            f"   既无含权重的 HF 目录，也无 LoRA adapter。\n"
+            + "\n".join("   " + s for s in listing)
         )
 
     def generate(self, messages: list[dict]) -> str:
@@ -161,7 +238,7 @@ def build_messages(task: dict, file_contents: dict[str, str]) -> list[dict]:
 
 
 def evaluate(model_path: str, tag: str, k: int, lenient: bool,
-             temperature: float) -> dict:
+             temperature: float, base_model: str | None = None) -> dict:
     from pipeline.verl_reward_fn import compute_score
 
     # 严格 apply：评测衡量真实能力，不用训练期的格式容错级联
@@ -182,7 +259,7 @@ def evaluate(model_path: str, tag: str, k: int, lenient: bool,
         print(f"⚠️ {fc_path.name} 不存在，prompt 不含文件内容（与训练输入不一致，"
               f"评测会明显偏低）。先跑 pipeline/extract_file_contents.py", flush=True)
 
-    gen = HFGenerator(model_path, temperature=temperature)
+    gen = HFGenerator(model_path, temperature=temperature, base_model=base_model)
 
     records: list[dict] = []
     t_start = time.time()
@@ -305,6 +382,8 @@ def compare(before_path: Path, after_path: Path) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description="闭环验证：训练前后 pass@1 对比")
     ap.add_argument("--model", help="模型路径（HF 目录或 VERL checkpoint 目录）")
+    ap.add_argument("--base-model", default=None,
+                    help=f"LoRA 评测时的基座权重目录（默认 {DEFAULT_BASE_MODEL}）")
     ap.add_argument("--tag", default="eval", help="本次评测标签，如 before / after")
     ap.add_argument("--out", default=None, help="结果 JSON 输出路径")
     ap.add_argument("-k", type=int, default=1, help="每题采样次数（默认 1 = pass@1）")
@@ -323,7 +402,8 @@ def main() -> int:
     if not args.model:
         ap.error("需要 --model，或用 --compare 对比已有结果")
 
-    summary = evaluate(args.model, args.tag, args.k, args.lenient, args.temperature)
+    summary = evaluate(args.model, args.tag, args.k, args.lenient,
+                       args.temperature, args.base_model)
 
     out_path = Path(args.out) if args.out else ROOT / "results" / f"eval_{args.tag}.json"
     if not out_path.is_absolute():
