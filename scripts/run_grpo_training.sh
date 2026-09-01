@@ -76,7 +76,7 @@ python3 -m verl.trainer.main_ppo \
   actor_rollout_ref.actor.use_torch_compile=False \
   actor_rollout_ref.actor.fsdp_config.model_dtype=bfloat16 \
   actor_rollout_ref.actor.fsdp_config.fsdp_size=1 \
-  actor_rollout_ref.actor.fsdp_config.use_orig_params=True \
+  actor_rollout_ref.actor.fsdp_config.use_orig_params=False \
   actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
   actor_rollout_ref.actor.fsdp_config.param_offload=False \
   actor_rollout_ref.ref.fsdp_config.param_offload=True \
@@ -89,7 +89,7 @@ python3 -m verl.trainer.main_ppo \
   actor_rollout_ref.rollout.temperature=0.8 \
   actor_rollout_ref.rollout.top_p=0.95 \
   actor_rollout_ref.rollout.top_k=-1 \
-  actor_rollout_ref.rollout.n=3 \
+  actor_rollout_ref.rollout.n=8 \
   actor_rollout_ref.rollout.enforce_eager=False \
   actor_rollout_ref.rollout.free_cache_engine=True \
   actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1 \
@@ -97,10 +97,11 @@ python3 -m verl.trainer.main_ppo \
   custom_reward_function.name=compute_score \
   trainer.n_gpus_per_node=1 \
   trainer.nnodes=1 \
-  trainer.total_epochs=5 \
+  trainer.total_epochs=1 \
   trainer.val_before_train=False \
+  trainer.resume_mode=disable \
   trainer.test_freq=-1 \
-  trainer.save_freq=20 \
+  trainer.save_freq=10 \
   trainer.default_local_dir="${OUTPUT_DIR}" \
   trainer.logger='["console"]' \
   trainer.project_name=swe-rl \
