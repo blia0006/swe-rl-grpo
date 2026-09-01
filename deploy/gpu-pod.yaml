@@ -37,6 +37,16 @@ spec:
           cpu: "4"
           memory: "19Gi"
       volumeMounts:
+        # ⚠️ 这个挂载**不可省略**。容器内 /dev/shm 默认只有 64MB，而 NCCL 初始化
+        # 每个 rank 要申请约 31.5MB 共享内存段，一旦上次训练泄漏了 /dev/shm/nccl-*
+        # （`pkill -9` 强杀 Ray worker 就会泄漏），新训练启动即报：
+        #   ncclSystemError: ... /dev/shm/nccl-XXXXXX (size 33030528),
+        #   error: No space left on device (28)
+        # 表现为 FSDP 初始化失败 + Hydra 退出，训练零步崩溃。
+        # 且 Pod 非 privileged 时 `mount -o remount,size=8G /dev/shm` 报 write-protected，
+        # 事后无法补救，只能重建 Pod —— 所以务必在建 Pod 时就带上本挂载。
+        # （若用 TKE 控制台手动粘贴精简 YAML，极易漏掉 volumes 段，已实测踩坑。
+        #   兜底手段见 scripts/run_grpo_training.sh 里的 NCCL_SHM_DISABLE=1。）
         - name: dshm
           mountPath: /dev/shm
   volumes:

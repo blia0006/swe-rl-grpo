@@ -38,6 +38,22 @@ REWARD_FN="$(pwd)/pipeline/verl_reward_fn.py"
 OUTPUT_DIR="${OUTPUT_DIR:-/workspace/checkpoints/swe-rl-grpo}"
 mkdir -p "$OUTPUT_DIR"
 
+# NCCL 关闭共享内存 / P2P 通道。
+# 【为什么必须加】容器内 /dev/shm 只有 64MB（K8s 默认），而 NCCL 初始化时每个
+# rank 要申请约 31.5MB 的共享内存段。一旦上次训练残留了未回收的 shm 段
+# （`pkill -9` 强杀 Ray worker 就会泄漏 /dev/shm/nccl-* ），新训练启动就会报：
+#   ncclSystemError: Error while creating shared memory segment
+#   /dev/shm/nccl-XXXXXX (size 33030528), error: No space left on device (28)
+# → FSDP 的 _sync_module_params_and_buffers 失败 → Hydra 直接退出，训练零步启动失败。
+# 而 Pod 非 privileged 时 `mount -o remount,size=8G /dev/shm` 会报 write-protected，
+# 无法扩容，因此改从 NCCL 侧规避。
+# 【为什么无性能损失】本课题是单卡训练（world_size=1 / n_gpus_per_node=1），
+# 不存在任何跨卡通信，shm 与 P2P 通道本就用不到，禁用只是省掉无用的初始化。
+# 【彻底修法】在 Pod YAML 里挂 medium=Memory 的 emptyDir 到 /dev/shm（见 deploy/gpu-pod.yaml）。
+export NCCL_SHM_DISABLE=1
+export NCCL_P2P_DISABLE=1
+export NCCL_DEBUG=WARN
+
 # reward function 调试日志：打印每次打分的 patch_head（诊断 patch 格式问题用）
 export REWARD_DEBUG_LOG=1
 
