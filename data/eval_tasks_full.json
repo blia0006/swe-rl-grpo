@@ -1,35 +1,36 @@
 [
   {
-    "task_id": "swe-synth-0002",
-    "task_type": "module_addition",
-    "difficulty": "medium",
+    "task_id": "swe-synth-0015",
+    "task_type": "feature_implementation",
+    "difficulty": "easy",
     "state": "ACCEPTED",
     "repo": "psf/cachecontrol",
     "repo_stars": 500,
     "base_commit": "91a26abbbebd4d08cbfca909f90cb3a186fe7739",
     "language": "python",
-    "problem_statement": "## 背景与上下文\n\nCacheControl 为 `requests` 提供透明的 HTTP 缓存能力，缓存决策高度依赖响应头中的 `Cache-Control` 指令。目前项目内部散落着对这些指令的临时解析逻辑，缺少一个独立、可复用的解析模块。本模块将该逻辑提取为纯函数，便于测试与维护。\n\n## 需要实现的功能\n\n在新增模块 `cachecontrol/directive_parser.py` 中实现两个公开函数：\n- `parse_cache_control`：解析单个 `Cache-Control` header 值，将其中的指令转换为字典。\n- `merge_cache_control`：合并多个 `Cache-Control` header 值，后出现的指令覆盖先出现的同名指令。\n\n实现必须是纯逻辑：不得进行任何网络、文件、随机或时间相关的操作。\n\n## 输入\n\n### `parse_cache_control(value: str)`\n- `value`：单个 `Cache-Control` 响应头字段值，例如 `public, max-age=3600`。该值可能为空字符串，也可能包含逗号分隔的多个指令；指令值可能是纯 token、带引号的字符串，或者缺失。\n\n### `merge_cache_control(headers: Iterable[str])`\n- `headers`：可迭代对象，每个元素是一个 `Cache-Control` header 值（与 `parse_cache_control` 的输入格式相同）。例如 `['public, max-age=60', 'private']`。\n\n## 输出\n\n### `parse_cache_control` 返回 `dict[str, str | None]`\n- 键：指令名，统一转换为小写。\n- 值：对于布尔指令（如 `public`、`no-store`），值为 `None`；对于有值指令（如 `max-age=3600`），值为去除首尾空白和可能包裹的双引号后的字符串；对于 `max-age=` 这类空值，值为空字符串 `\"\"`。\n- 若同一 header 中重复出现同一指令，以最后出现的值为准。\n\n### `merge_cache_control` 返回 `dict[str, str | None]`\n- 合并所有输入 header 的解析结果，规则同单 header 重复指令：后出现的 header 中的指令覆盖先前 header 中的同名指令；若合并的 headers 为空，返回空字典。\n\n## 预期行为\n\n1. 分割指令时，逗号是分隔符，但双引号内的逗号不是分隔符。\n2. 指令名不区分大小写，输出统一为小写；指令名和等号周围的空白应被忽略。\n3. 值若被一对双引号包围，输出时去掉这对双引号，内部内容保持不变（不处理转义序列）。\n4. 空输入、仅包含空白或逗号的输入返回空字典。\n5. 缺少指令名的片段（如 `=bad`）应被忽略，不影响其他指令。\n6. 重复指令采用后出现者覆盖的策略，无论是同一 header 内还是不同 header 之间。\n7. 布尔指令和有值指令可以混合存在，例如 `public, max-age=3600`。\n8. 有等号但无值（如 `max-age=`）视为空字符串值；值的首尾空白应被忽略。\n9. 多个 header 的合并顺序由 `headers` 的迭代顺序决定，后迭代的元素具有更高优先级。\n\n## 约束条件\n\n- 新增模块路径必须为 `cachecontrol/directive_parser.py`；不得修改测试文件或其他现有文件。\n- 只允许使用 Python 标准库和项目已有依赖；不得引入新的第三方依赖。\n- 实现中不得出现 `NotImplementedError`。\n- 代码风格应与项目现有代码保持一致（SPDX 头、类型注解等）。",
+    "problem_statement": "## 背景与上下文\nCacheControl 是一个为 HTTP 请求提供缓存能力的库。`cachecontrol/caches/file_cache.py` 模块基于文件系统存储缓存条目，`_FileCacheMixin` 为 `FileCache` 和 `SeparateBodyFileCache` 提供共享的文件操作实现。本任务要求实现其中的 `get` 方法，用于从磁盘读取缓存内容。\n\n## 需要实现的功能\n实现 `_FileCacheMixin.get` 方法，使其能够根据给定的缓存键定位对应的缓存文件，并返回文件的字节内容；如果缓存文件不存在，则返回 `None`。\n\n## 输入\n- `key: str`：缓存键，通常由上层缓存逻辑生成，用于唯一标识一个缓存条目。该字符串将被传入 `_fn` 方法以得到实际文件路径。\n\n## 输出\n- 返回 `bytes | None`：\n  - 当缓存文件存在且可读时，返回文件内容的完整 `bytes`。\n  - 当缓存文件不存在时，返回 `None`。\n\n## 预期行为\n1. 调用 `_fn(key)` 获取目标文件路径。\n2. 如果该路径对应的文件存在，以二进制模式打开文件，读取其全部内容并返回。\n3. 如果该路径对应的文件不存在，不抛出异常，而是返回 `None`。\n\n## 约束条件\n- 不得修改任何测试文件。\n- 保持函数签名 `def get(self, key: str) -> bytes | None` 不变。\n- 实现应基于标准库能力，不引入额外第三方依赖。",
     "hints": null,
     "modified_files": [
-      "cachecontrol/directive_parser.py"
+      "cachecontrol/caches/file_cache.py"
     ],
     "do_not_modify": [
       "tests/test_cache_control.py",
-      "tests/test_directive_parser_synth.py",
-      "tests/test_serialization.py"
+      "tests/test_expires_heuristics.py",
+      "tests/test_regressions.py",
+      "tests/test_storage_filecache.py"
     ],
     "test_cmd": "pytest tests/ -q",
     "FAIL_TO_PASS": [
-      "tests/test_directive_parser_synth.py::test_merge_multiple_headers",
-      "tests/test_directive_parser_synth.py::test_merge_no_headers_returns_empty",
-      "tests/test_directive_parser_synth.py::test_parse_boolean_directive_without_value",
-      "tests/test_directive_parser_synth.py::test_parse_case_insensitive_and_whitespace",
-      "tests/test_directive_parser_synth.py::test_parse_empty_string_and_blank_segments",
-      "tests/test_directive_parser_synth.py::test_parse_ignores_invalid_segments",
-      "tests/test_directive_parser_synth.py::test_parse_quoted_value_with_comma",
-      "tests/test_directive_parser_synth.py::test_parse_repeated_directive_last_wins",
-      "tests/test_directive_parser_synth.py::test_parse_simple_boolean_and_max_age",
-      "tests/test_directive_parser_synth.py::test_parse_value_with_empty_value"
+      "tests/test_cache_control.py::TestCacheControllerResponse::test_update_cached_response_with_valid_headers_separate_body",
+      "tests/test_regressions.py::Test39::test_file_cache_recognizes_consumed_file_handle",
+      "tests/test_storage_filecache.py::TestFileCache::test_body_stored_inline",
+      "tests/test_storage_filecache.py::TestFileCache::test_filecache_directory_already_exists",
+      "tests/test_storage_filecache.py::TestFileCache::test_filecache_directory_not_exists",
+      "tests/test_storage_filecache.py::TestFileCache::test_filecache_from_cache",
+      "tests/test_storage_filecache.py::TestSeparateBodyFileCache::test_body_actually_stored_separately",
+      "tests/test_storage_filecache.py::TestSeparateBodyFileCache::test_filecache_directory_already_exists",
+      "tests/test_storage_filecache.py::TestSeparateBodyFileCache::test_filecache_directory_not_exists",
+      "tests/test_storage_filecache.py::TestSeparateBodyFileCache::test_filecache_from_cache"
     ],
     "PASS_TO_PASS": [
       "tests/test_cache_control.py::TestCacheControlRequest::test_cache_request_fresh_expires",
@@ -56,41 +57,57 @@
       "tests/test_cache_control.py::TestCacheControllerResponse::test_no_cache_with_wrong_sized_body",
       "tests/test_cache_control.py::TestCacheControllerResponse::test_update_cached_response_no_local_cache",
       "tests/test_cache_control.py::TestCacheControllerResponse::test_update_cached_response_with_valid_headers",
-      "tests/test_cache_control.py::TestCacheControllerResponse::test_update_cached_response_with_valid_headers_separate_body",
-      "tests/test_serialization.py::TestSerializer::test_load_by_version_v0",
-      "tests/test_serialization.py::TestSerializer::test_load_by_version_v1",
-      "tests/test_serialization.py::TestSerializer::test_load_by_version_v2",
-      "tests/test_serialization.py::TestSerializer::test_load_by_version_v3",
-      "tests/test_serialization.py::TestSerializer::test_no_body_creates_response_file_handle_on_dumps",
-      "tests/test_serialization.py::TestSerializer::test_no_incomplete_read_on_dumps",
-      "tests/test_serialization.py::TestSerializer::test_no_vary_header",
-      "tests/test_serialization.py::TestSerializer::test_read_latest_version",
-      "tests/test_serialization.py::TestSerializer::test_read_latest_version_streamable",
-      "tests/test_serialization.py::TestSerializer::test_read_version_v4"
+      "tests/test_expires_heuristics.py::TestExpiresAfter::test_expires_after_one_day",
+      "tests/test_expires_heuristics.py::TestHeuristicWith3xxResponse::test_heuristic_applies_to_301",
+      "tests/test_expires_heuristics.py::TestHeuristicWith3xxResponse::test_heuristic_applies_to_304",
+      "tests/test_expires_heuristics.py::TestHeuristicWithoutWarning::test_no_header_change_means_no_warning_header",
+      "tests/test_expires_heuristics.py::TestLastModified::test_last_modified",
+      "tests/test_expires_heuristics.py::TestModifiedUnitTests::test_expires_is_not_replaced_when_present",
+      "tests/test_expires_heuristics.py::TestModifiedUnitTests::test_expiry_is_no_more_that_twenty_four_hours",
+      "tests/test_expires_heuristics.py::TestModifiedUnitTests::test_last_modified_is_not_used_when_cache_control_present",
+      "tests/test_expires_heuristics.py::TestModifiedUnitTests::test_last_modified_is_not_used_when_status_is_unknown",
+      "tests/test_expires_heuristics.py::TestModifiedUnitTests::test_last_modified_is_used",
+      "tests/test_expires_heuristics.py::TestModifiedUnitTests::test_last_modified_is_used_when_cache_control_public",
+      "tests/test_expires_heuristics.py::TestModifiedUnitTests::test_no_expiry_is_inferred_when_no_last_modified_is_present",
+      "tests/test_expires_heuristics.py::TestModifiedUnitTests::test_warning_is_not_added_when_heuristic_was_not_used",
+      "tests/test_expires_heuristics.py::TestModifiedUnitTests::test_warning_not_added_when_response_more_recent_than_24_hours",
+      "tests/test_expires_heuristics.py::TestOneDayCache::test_cache_for_one_day",
+      "tests/test_expires_heuristics.py::TestUseExpiresHeuristic::test_expires_heuristic_arg",
+      "tests/test_regressions.py::test_getattr_during_gc",
+      "tests/test_storage_filecache.py::TestFileCache::test_filecache_with_delete_request",
+      "tests/test_storage_filecache.py::TestFileCache::test_filecache_with_put_request",
+      "tests/test_storage_filecache.py::TestFileCache::test_key_length",
+      "tests/test_storage_filecache.py::TestFileCache::test_lock_class",
+      "tests/test_storage_filecache.py::TestFileCache::test_simple_lockfile_arg",
+      "tests/test_storage_filecache.py::TestSeparateBodyFileCache::test_filecache_with_delete_request",
+      "tests/test_storage_filecache.py::TestSeparateBodyFileCache::test_filecache_with_put_request",
+      "tests/test_storage_filecache.py::TestSeparateBodyFileCache::test_key_length",
+      "tests/test_storage_filecache.py::TestSeparateBodyFileCache::test_lock_class",
+      "tests/test_storage_filecache.py::TestSeparateBodyFileCache::test_simple_lockfile_arg"
     ],
-    "image": "ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/swe-synth-0002:v1",
-    "solution_image": "ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/swe-synth-0002:v1-sol",
+    "image": "ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/swe-synth-0015:v1",
+    "solution_image": "ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/swe-synth-0015:v1-sol",
     "verify_script": "/task/verify.sh",
     "generated_by": {
       "model": "deepseek-v4-pro-202606",
       "agent": "agent1",
-      "ts": "2026-08-21T14:05:44.395845+00:00",
-      "prompt_version": "module-v1",
-      "input_tokens": 10647,
-      "output_tokens": 52882
+      "ts": "2026-08-22T10:31:09.684368+00:00",
+      "prompt_version": "v1",
+      "input_tokens": 25928,
+      "output_tokens": 112006
     },
     "validation": {
       "local_sanity_passed": true,
-      "local_duration_sec": 4.574307918548584,
+      "local_duration_sec": 5.371990919113159,
       "sandbox_tool": "swe-synth-shared-runner",
-      "sandbox_instance_id": "h72d7f7wadc7ps5cclqf7vxvp3w7u5aypbpx3l7g",
+      "sandbox_instance_id": "atuichpqj2gkenf327apzuslapjtu2hxl3uueztp",
       "empty_solution_result": "fail",
       "golden_solution_result": "pass",
       "deterministic": true,
-      "duration_sec": 29.4,
+      "duration_sec": 85.6,
       "llm_attempt": {
         "solvable": true,
-        "reason": "题干准确：LLM 第 1 次尝试即依据题干完成任务并通过全部判据",
+        "reason": "题干准确：LLM 第 1 次尝试即依据题干实现并通过全部判据",
         "first_pass_attempt": 1,
         "difficulty_signal": "easy_for_llm",
         "n_attempts": 1,
@@ -99,250 +116,82 @@
             "attempt": 1,
             "passed": true,
             "f2p": "10/10",
-            "p2p": "35/35",
+            "p2p": "51/51",
             "error": null
           }
         ]
       },
-      "proof_dir": "/root/swe_synth/data/proofs/swe-synth-0002"
+      "proof_dir": "/root/swe_synth/data/proofs/swe-synth-0015"
     },
     "overlap_check": {
       "passed": true,
       "method": "github_search+bm25+embedding+llm_judge",
       "queried": [
-        "derive_key",
-        "directive_parser",
-        "NotImplementedError",
-        "parse_cache_control"
+        "get",
+        "file_cache",
+        "SeparateBodyFileCache",
+        "CacheControl"
       ],
       "top_candidates": [],
-      "target_file_last_modified": null,
-      "months_since_last_change": null,
+      "target_file_last_modified": "2024-11-12T23:31:08Z",
+      "months_since_last_change": 21.3,
       "verdict_reason": "未检索到与本题相关的 issue/PR"
     },
     "reject_reason": null
   },
   {
-    "task_id": "swe-synth-0012",
-    "task_type": "module_addition",
+    "task_id": "swe-synth-0020",
+    "task_type": "feature_implementation",
     "difficulty": "easy",
-    "state": "ACCEPTED",
-    "repo": "psf/cachecontrol",
-    "repo_stars": 500,
-    "base_commit": "91a26abbbebd4d08cbfca909f90cb3a186fe7739",
-    "language": "python",
-    "problem_statement": "## 背景与上下文\nCacheControl 是一个给 requests 添加 HTTP 缓存透明层的库。缓存逻辑中经常需要解析响应头里的 Cache-Control 字段（例如判断 max-age、no-store 等）。当前项目中缺少一个独立、可复用的 Cache-Control 指令解析模块。\n\n## 需要实现的功能\n新增 `cachecontrol/cache_control_directives.py`。该模块负责解析 Cache-Control 头字段，并提供从 header 映射中提取指令、获取 max-age 数值、判断某指令是否存在等纯函数。\n\n## 输入\n- `parse_cache_control(value: str)`：参数是单个 Cache-Control 头的字符串值，可能为空。\n- `cache_control_from_headers(headers: Mapping[str, str])`：参数是 HTTP 头的映射，键为头字段名，值为头字段值。\n- `get_max_age(headers: Mapping[str, str])`：同上。\n- `has_directive(headers: Mapping[str, str], directive: str)`：同上，外加指令名。\n\n项目允许 headers 使用大小写不同的键，如 `Cache-Control` 或 `cache-control`。\n\n## 输出\n- `parse_cache_control` 返回 `dict[str, str | None]`，键为指令名（统一小写），值为指令的字符串值；对于没有取值的指令，返回 `None`。空字符串输入返回空 dict。\n- `cache_control_from_headers` 返回从 headers 中取出的 Cache-Control 解析结果；若不存在该头或值为空，返回空 dict。若出现多个大小写不同的同名 header（实际不常见），以最后遍历到的一个为准。\n- `get_max_age` 返回 `int | None`：当 max-age 指令存在且其值能被 `int()` 解析时返回该整数；否则返回 `None`（包括 max-age 不存在、值为空、不是合法整数）。\n- `has_directive` 返回 `bool`：若指令名（不区分大小写）存在于 Cache-Control 中则返回 `True`，否则 `False`。\n\n## 预期行为\n1. 解析以逗号分隔指令，忽略指令前后的空白；空指令片段被忽略。\n2. 指令名大小写不敏感，统一转为小写作为字典键。\n3. 形如 `foo=bar` 的指令，值为 `bar`；形如 `foo=\"bar\"` 的值要去掉两侧双引号，内部逗号保留。\n4. 形如 `foo` 的指令，值为 `None`。\n5. 若同一指令出现多次，后面的值覆盖前面的值。\n6. 等号左边为空的无效片段（如 `=bar`）忽略；等号右边为空时，值为空字符串，不会被丢弃。\n7. `cache_control_from_headers` 查找 header 时忽略键大小写。\n8. `get_max_age` 只在 `max-age` 的值可被 `int()` 解析时返回整数，否则 `None`。\n9. `has_directive` 忽略指令参数大小写。\n\n## 约束条件\n- 新模块必须放在 `cachecontrol/cache_control_directives.py`，不得修改任何测试文件。\n- 只能使用 Python 标准库和项目已有依赖（Requests、urllib3、filelock、msgpack、redis、cherrypy），不得引入新的第三方依赖。\n- 所有函数必须是纯函数，不得进行网络请求、文件读写、随机数或依赖当前时间。\n- 测试文件为 `tests/test_cache_control_directives_synth.py`，不要修改它。",
-    "hints": null,
-    "modified_files": [
-      "cachecontrol/cache_control_directives.py"
-    ],
-    "do_not_modify": [
-      "tests/test_cache_control.py",
-      "tests/test_cache_control_directives_synth.py",
-      "tests/test_serialization.py"
-    ],
-    "test_cmd": "pytest tests/ -q",
-    "FAIL_TO_PASS": [
-      "tests/test_cache_control_directives_synth.py::test_cache_control_from_headers_case_insensitive",
-      "tests/test_cache_control_directives_synth.py::test_cache_control_from_headers_missing_header",
-      "tests/test_cache_control_directives_synth.py::test_get_max_age_invalid_or_missing_returns_none",
-      "tests/test_cache_control_directives_synth.py::test_get_max_age_valid",
-      "tests/test_cache_control_directives_synth.py::test_has_directive",
-      "tests/test_cache_control_directives_synth.py::test_parse_duplicate_directive_last_wins",
-      "tests/test_cache_control_directives_synth.py::test_parse_ignores_empty_and_invalid_fragments",
-      "tests/test_cache_control_directives_synth.py::test_parse_normalizes_directive_names",
-      "tests/test_cache_control_directives_synth.py::test_parse_quoted_value_preserves_comma",
-      "tests/test_cache_control_directives_synth.py::test_parse_simple_directives"
-    ],
-    "PASS_TO_PASS": [
-      "tests/test_cache_control.py::TestCacheControlRequest::test_cache_request_fresh_expires",
-      "tests/test_cache_control.py::TestCacheControlRequest::test_cache_request_fresh_max_age",
-      "tests/test_cache_control.py::TestCacheControlRequest::test_cache_request_max_age_0",
-      "tests/test_cache_control.py::TestCacheControlRequest::test_cache_request_no_cache",
-      "tests/test_cache_control.py::TestCacheControlRequest::test_cache_request_no_headers",
-      "tests/test_cache_control.py::TestCacheControlRequest::test_cache_request_no_store",
-      "tests/test_cache_control.py::TestCacheControlRequest::test_cache_request_not_in_cache",
-      "tests/test_cache_control.py::TestCacheControlRequest::test_cache_request_pragma_no_cache",
-      "tests/test_cache_control.py::TestCacheControlRequest::test_cache_request_unfresh_expires",
-      "tests/test_cache_control.py::TestCacheControlRequest::test_cache_request_unfresh_max_age",
-      "tests/test_cache_control.py::TestCacheControlRequest::test_cached_request_with_bad_max_age_headers_not_returned",
-      "tests/test_cache_control.py::TestCacheControlRequest::test_cached_request_with_malformed_date_not_returned",
-      "tests/test_cache_control.py::TestCacheControllerResponse::test_cache_response_cache_max_age",
-      "tests/test_cache_control.py::TestCacheControllerResponse::test_cache_response_cache_max_age_with_invalid_value_not_cached",
-      "tests/test_cache_control.py::TestCacheControllerResponse::test_cache_response_no_cache_control",
-      "tests/test_cache_control.py::TestCacheControllerResponse::test_cache_response_no_store",
-      "tests/test_cache_control.py::TestCacheControllerResponse::test_cache_response_no_store_with_etag",
-      "tests/test_cache_control.py::TestCacheControllerResponse::test_no_cache_non_20x_response",
-      "tests/test_cache_control.py::TestCacheControllerResponse::test_no_cache_with_malformed_date",
-      "tests/test_cache_control.py::TestCacheControllerResponse::test_no_cache_with_no_date",
-      "tests/test_cache_control.py::TestCacheControllerResponse::test_no_cache_with_vary_star",
-      "tests/test_cache_control.py::TestCacheControllerResponse::test_no_cache_with_wrong_sized_body",
-      "tests/test_cache_control.py::TestCacheControllerResponse::test_update_cached_response_no_local_cache",
-      "tests/test_cache_control.py::TestCacheControllerResponse::test_update_cached_response_with_valid_headers",
-      "tests/test_cache_control.py::TestCacheControllerResponse::test_update_cached_response_with_valid_headers_separate_body",
-      "tests/test_serialization.py::TestSerializer::test_load_by_version_v0",
-      "tests/test_serialization.py::TestSerializer::test_load_by_version_v1",
-      "tests/test_serialization.py::TestSerializer::test_load_by_version_v2",
-      "tests/test_serialization.py::TestSerializer::test_load_by_version_v3",
-      "tests/test_serialization.py::TestSerializer::test_no_body_creates_response_file_handle_on_dumps",
-      "tests/test_serialization.py::TestSerializer::test_no_incomplete_read_on_dumps",
-      "tests/test_serialization.py::TestSerializer::test_no_vary_header",
-      "tests/test_serialization.py::TestSerializer::test_read_latest_version",
-      "tests/test_serialization.py::TestSerializer::test_read_latest_version_streamable",
-      "tests/test_serialization.py::TestSerializer::test_read_version_v4"
-    ],
-    "image": "ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/swe-synth-0012:v1",
-    "solution_image": "ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/swe-synth-0012:v1-sol",
-    "verify_script": "/task/verify.sh",
-    "generated_by": {
-      "model": "deepseek-v4-pro-202606",
-      "agent": "agent1",
-      "ts": "2026-08-22T09:38:03.456968+00:00",
-      "prompt_version": "module-v1",
-      "input_tokens": 9843,
-      "output_tokens": 36021
-    },
-    "validation": {
-      "local_sanity_passed": true,
-      "local_duration_sec": 4.679713249206543,
-      "sandbox_tool": "swe-synth-shared-runner",
-      "sandbox_instance_id": "afoqt25gawb2ecxlrinvvmrwshopadj3bkhce3nq",
-      "empty_solution_result": "fail",
-      "golden_solution_result": "pass",
-      "deterministic": true,
-      "duration_sec": 85.0,
-      "llm_attempt": {
-        "solvable": true,
-        "reason": "题干准确：LLM 第 2 次尝试即依据题干完成任务并通过全部判据",
-        "first_pass_attempt": 2,
-        "difficulty_signal": "moderate",
-        "n_attempts": 2,
-        "attempts": [
-          {
-            "attempt": 1,
-            "passed": false,
-            "f2p": "9/10",
-            "p2p": "35/35",
-            "error": null
-          },
-          {
-            "attempt": 2,
-            "passed": true,
-            "f2p": "10/10",
-            "p2p": "35/35",
-            "error": null
-          }
-        ]
-      },
-      "proof_dir": "/root/swe_synth/data/proofs/swe-synth-0012"
-    },
-    "overlap_check": {
-      "passed": true,
-      "method": "github_search+bm25+embedding+llm_judge",
-      "queried": [
-        "py",
-        "cache_control_directives",
-        "test_cache_control_directives_synth",
-        "cache_control_from_headers"
-      ],
-      "top_candidates": [],
-      "target_file_last_modified": null,
-      "months_since_last_change": null,
-      "verdict_reason": "未检索到与本题相关的 issue/PR"
-    },
-    "reject_reason": null
-  },
-  {
-    "task_id": "swe-synth-0006",
-    "task_type": "refactoring",
-    "difficulty": "medium",
     "state": "ACCEPTED",
     "repo": "pallets/itsdangerous",
     "repo_stars": 2900,
     "base_commit": "672971d66a2ef9f85151e53283113f33d642dabd",
     "language": "python",
-    "problem_statement": "## 背景与上下文\n`Serializer` 是 itsdangerous 中负责将数据与签名进行序列化/反序列化的核心类。`iter_unsigners` 用于在验签时按顺序产出所有应尝试的签名器：先产出配置的主签名器，再根据 `fallback_signers` 列表构造多个备选签名器。当前实现中，fallback 的三种合法表示（dict、tuple、类型）通过 if/elif/else 在循环内解析，并与 salt 默认值处理、构造签名器逻辑混在一起，导致圈复杂度较高、可读性不足。本重构旨在不改变对外行为的前提下，通过提取模块级辅助函数来降低方法复杂度，提升职责分离。\n\n## 需要实现的功能\n这是一道代码重构题。请对 `Serializer.iter_unsigners` 进行结构化重构，使其更短、圈复杂度更低，同时保持与现有测试和调用方的完整兼容。重构的核心是提取私有辅助函数，而不是修改签名或算法逻辑。\n\n## 输入\n- `self`：`Serializer` 实例，提供 `salt`、`fallback_signers`、`signer`、`signer_kwargs`、`secret_keys` 与 `make_signer`。\n- `salt`：`str | bytes | None`，可选。`None` 表示使用实例默认 salt。\n\n## 输出\n- 返回一个生成器，迭代产出 `Signer` 实例。\n- 迭代顺序固定为：首先返回 `self.make_signer(salt)`；然后按 `self.fallback_signers` 中每个 fallback 配置，依次对每个 `secret_key` 构造并返回一个备选 Signer。\n- 不修改参数、不返回其他类型，异常行为与当前实现一致。\n\n## 预期行为\n1. 必须完全保持以下行为：\n   - `salt is None` 时使用 `self.salt`。\n   - 首个 yield 为 `self.make_signer(salt)`。\n   - 对 `self.fallback_signers` 的遍历顺序与 `self.secret_keys` 的组合顺序不变：外层是 fallback，内层是 secret key。\n   - 三种 fallback 形式解析规则不变：\n     - dict：将其作为 kwargs，使用 `self.signer` 作为签名器类。\n     - tuple：解包为 `(签名器类, kwargs)`。\n     - 类：直接使用该签名器类，使用 `self.signer_kwargs` 作为 kwargs。\n   - 构造签名器时始终传入 `secret_key` 和关键字 `salt=salt`。\n2. 必须消除以下坏味道：\n   - `iter_unsigners` 内嵌套的 if/elif/else 分支。\n   - 循环内对 `fallback` 的语义重赋值。\n   - 默认 salt 处理与签名器构造逻辑的耦合。\n3. 允许将独立职责提取到模块级私有辅助函数中，例如：\n   - 解析 fallback 配置并返回 `(signer_cls, kwargs)`。\n   - 获取最终使用的 salt。\n   这些辅助函数应使用下划线开头，放置在 `helpers` 字段中（追加到文件末尾即可）。\n\n## 约束条件\n- 不得修改 `Serializer.iter_unsigners` 的方法签名（参数名、顺序、默认值、返回值注解必须保持逐字不变）。\n- 不得修改任何测试文件。\n- 重构后的行为必须与现有实现完全一致。\n- 不得引入新的第三方依赖；只能使用标准库以及 `itsdangerous.serializer` 模块已经导入的符号（如 `t`、`cabc`、`Signer`）。\n- 提取出的辅助函数必须为模块级、私有（下划线开头），不能放入类中作为方法，也不能依赖外部可变状态。\n- 不得删除或重命名 `Serializer.iter_unsigners`。\n\n## 自动化质量门槛\n\n除了「所有既有测试必须保持通过」之外，本题还有一组**静态指标**判据\n（由 `tests/test_itsdangerous/test_refactor_guard_swe_synth_0006.py` 自动检查，该文件属于判据、不可修改）：\n\n| 指标 | 重构前 | 要求 |\n|---|---|---|\n| `Serializer.iter_unsigners` 的有效代码行数 | 13 | ≤ **9** |\n| `Serializer.iter_unsigners` 的圈复杂度 | 6 | ≤ **3** |\n| 文件内任一函数的有效代码行数 | — | ≤ **21** |\n| `Serializer.iter_unsigners` 的参数列表 | `self, salt` | 保持完全不变 |\n\n说明：\n- 「有效代码行数」不含 docstring、空行与纯注释行，所以删注释、压行都无助于达标\n- 最后一项限制的用意是防止「把逻辑整体搬到另一个大函数」这种伪重构\n- 达标的常规做法是：把目标函数中彼此独立的职责，提取为若干个小的私有辅助函数\n",
+    "problem_statement": "## 背景与上下文\nitsdangerous 仓库用于为数据签名和序列化提供安全工具，encoding 模块封装了多种编码转换，包括 Base64 和字节序处理。base64_decode 是该模块中负责将 URL-safe Base64 文本或字节串还原为原始 bytes 的函数。\n\n## 需要实现的功能\n实现 base64_decode 函数，使其能够接收 URL-safe Base64 编码的输入，返回解码后的 bytes。解码过程需支持 URL-safe Base64 变体（使用 `-` 和 `_` 替代标准 Base64 的 `+` 和 `/`），并能处理缺少末尾填充字符 `=` 的情况。\n\n## 输入\n- `string`：类型为 `str | bytes`，表示待解码的 URL-safe Base64 数据。\n  - 当 `string` 为 `str` 时，内部需先将其按 ASCII 编码转换为 `bytes`，编码错误处理策略为 `errors='ignore'`；因此其中非 ASCII 字符会被忽略。\n  - 当 `string` 为 `bytes` 时，直接使用该字节串。\n  - 输入可能缺少 Base64 标准要求的 `=` 填充，也可能包含不完整的填充长度。\n\n## 输出\n- 正常情况下返回一个 `bytes` 对象，即输入 URL-safe Base64 数据解码后的原始字节。\n- 成功解码只有一条返回路径；若输入无法作为 URL-safe Base64 解码，则通过异常表示失败，不返回任何值。\n\n## 预期行为\n1. 若 `string` 是 `str`，先以 ASCII 编码、`errors='ignore'` 策略将其转换为 `bytes`，非 ASCII 字符被忽略；若 `string` 是 `bytes`，则直接使用该字节串。\n2. 对转换后的 `bytes` 进行 URL-safe Base64 解码；如果长度不是 4 的倍数，需补齐 `=` 填充后再解码。\n3. 解码成功后返回对应的原始 `bytes`。\n4. 如果输入不是有效的 URL-safe Base64 数据（例如包含非法字符或者补齐 `=` 后仍无法正确解码），抛出 `BadData` 异常，异常消息为 `'Invalid base64-encoded data'`。\n\n## 约束条件\n- 不得修改任何测试文件。\n- 保持函数签名 `def base64_decode(string: str | bytes) -> bytes` 不变。\n- 应使用 URL-safe Base64 解码能力（如标准库提供的方法），不要实现自定义的 Base64 解码算法。\n- 异常类型必须是 `BadData`，且消息必须与给定字符串完全一致。",
     "hints": null,
     "modified_files": [
-      "src/itsdangerous/serializer.py"
+      "src/itsdangerous/encoding.py"
     ],
     "do_not_modify": [
-      "tests/test_itsdangerous/test_refactor_guard_swe_synth_0006.py",
-      "tests/test_itsdangerous/test_serializer.py"
+      "tests/test_itsdangerous/test_encoding.py"
     ],
     "test_cmd": "pytest tests/ -q",
     "FAIL_TO_PASS": [
-      "tests/test_itsdangerous/test_refactor_guard_swe_synth_0006.py::test_target_function_complexity_reduced",
-      "tests/test_itsdangerous/test_refactor_guard_swe_synth_0006.py::test_target_function_is_simplified"
+      "tests/test_itsdangerous/test_encoding.py::test_base64[\\u7121\\u9650]",
+      "tests/test_itsdangerous/test_encoding.py::test_base64[infinite]",
+      "tests/test_itsdangerous/test_encoding.py::test_base64_bad"
     ],
     "PASS_TO_PASS": [
-      "tests/test_itsdangerous/test_refactor_guard_swe_synth_0006.py::test_no_new_monolithic_function",
-      "tests/test_itsdangerous/test_refactor_guard_swe_synth_0006.py::test_signature_unchanged",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_alt_salt[Serializer]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_alt_salt[serializer_factory1]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_bad_payload_exception[Serializer]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_bad_payload_exception[serializer_factory1]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_bad_signature_exception[Serializer]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_bad_signature_exception[serializer_factory1]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_changed_value[Serializer-<lambda>0]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_changed_value[Serializer-<lambda>1]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_changed_value[Serializer-<lambda>2]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_changed_value[Serializer-<lambda>3]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_changed_value[serializer_factory1-<lambda>0]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_changed_value[serializer_factory1-<lambda>1]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_changed_value[serializer_factory1-<lambda>2]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_changed_value[serializer_factory1-<lambda>3]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_fallback_signers[Serializer]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_fallback_signers[serializer_factory1]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_file[Serializer]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_file[serializer_factory1]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_iter_unsigners[Serializer]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_iter_unsigners[serializer_factory1]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_loads_unsafe[Serializer]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_loads_unsafe[serializer_factory1]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_serializer[Serializer-None]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_serializer[Serializer-True]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_serializer[Serializer-str]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_serializer[Serializer-text]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_serializer[Serializer-value4]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_serializer[Serializer-value5]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_serializer[serializer_factory1-None]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_serializer[serializer_factory1-True]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_serializer[serializer_factory1-str]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_serializer[serializer_factory1-text]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_serializer[serializer_factory1-value4]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_serializer[serializer_factory1-value5]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_serializer_kwargs[Serializer]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_serializer_kwargs[serializer_factory1]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_signer_cls[Serializer]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_signer_cls[serializer_factory1]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_signer_kwargs[Serializer]",
-      "tests/test_itsdangerous/test_serializer.py::TestSerializer::test_signer_kwargs[serializer_factory1]",
-      "tests/test_itsdangerous/test_serializer.py::test_digests"
+      "tests/test_itsdangerous/test_encoding.py::test_int_bytes[0-]",
+      "tests/test_itsdangerous/test_encoding.py::test_int_bytes[18446744073709551615-\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff]",
+      "tests/test_itsdangerous/test_encoding.py::test_int_bytes[192-\\xc0]",
+      "tests/test_itsdangerous/test_encoding.py::test_want_bytes[ma\\xf1ana]",
+      "tests/test_itsdangerous/test_encoding.py::test_want_bytes[tomorrow]"
     ],
-    "image": "ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/swe-synth-0006:v1",
-    "solution_image": "ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/swe-synth-0006:v1-sol",
+    "image": "ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/swe-synth-0020:v1",
+    "solution_image": "ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/swe-synth-0020:v1-sol",
     "verify_script": "/task/verify.sh",
     "generated_by": {
       "model": "deepseek-v4-pro-202606",
       "agent": "agent1",
-      "ts": "2026-08-21T17:17:09.896321+00:00",
-      "prompt_version": "refactor-v1",
-      "input_tokens": 228021,
-      "output_tokens": 960889
+      "ts": "2026-08-22T13:58:01.894540+00:00",
+      "prompt_version": "v1",
+      "input_tokens": 274190,
+      "output_tokens": 1096305
     },
     "validation": {
       "local_sanity_passed": true,
-      "local_duration_sec": 1.1030094623565674,
+      "local_duration_sec": 1.0166594982147217,
       "sandbox_tool": "swe-synth-shared-runner",
-      "sandbox_instance_id": "dprzudgbeh7qrza7qchdy5hwfdiry23x3vgwcrim",
+      "sandbox_instance_id": "eclsjxu7zcuv37qgroc5of4yusp5oyeuvx65tjrl",
       "empty_solution_result": "fail",
       "golden_solution_result": "pass",
       "deterministic": true,
-      "duration_sec": 35.7,
+      "duration_sec": 80.2,
       "llm_attempt": {
         "solvable": true,
-        "reason": "题干准确：LLM 第 2 次尝试即依据题干完成任务并通过全部判据",
+        "reason": "题干准确：LLM 第 2 次尝试即依据题干实现并通过全部判据",
         "first_pass_attempt": 2,
         "difficulty_signal": "moderate",
         "n_attempts": 2,
@@ -350,39 +199,39 @@
           {
             "attempt": 1,
             "passed": false,
-            "f2p": "1/2",
-            "p2p": "43/43",
-            "error": "AssertionError: Serializer.iter_unsigners 的圈复杂度仍为 4（重构前 6），要求不超过 3。请减少嵌套分支，把条件判断收敛到辅助函数中。"
+            "f2p": "0/0",
+            "p2p": "0/0",
+            "error": "生成的代码语法错误：第 34 行 unindent does not match any outer indentation level"
           },
           {
             "attempt": 2,
             "passed": true,
-            "f2p": "2/2",
-            "p2p": "43/43",
+            "f2p": "3/3",
+            "p2p": "5/5",
             "error": null
           }
         ]
       },
-      "proof_dir": "/root/swe_synth/data/proofs/swe-synth-0006"
+      "proof_dir": "/root/swe_synth/data/proofs/swe-synth-0020"
     },
     "overlap_check": {
       "passed": true,
       "method": "github_search+bm25+embedding+llm_judge",
       "queried": [
-        "main",
-        "serializer",
-        "test_refactor_guard_swe_synth_0006",
-        "test_itsdangerous"
+        "base64_decode",
+        "encoding",
+        "base64_decode",
+        "itsdangerous"
       ],
       "top_candidates": [],
-      "target_file_last_modified": "2025-05-28T20:55:38Z",
-      "months_since_last_change": 14.8,
+      "target_file_last_modified": "2024-04-13T18:53:08Z",
+      "months_since_last_change": 28.3,
       "verdict_reason": "未检索到与本题相关的 issue/PR"
     },
     "reject_reason": null
   },
   {
-    "task_id": "swe-synth-0009",
+    "task_id": "swe-synth-0022",
     "task_type": "module_addition",
     "difficulty": "easy",
     "state": "ACCEPTED",
@@ -390,45 +239,46 @@
     "repo_stars": 2000,
     "base_commit": "72d37955ae5ba86267fd68c97b56866bd04c3ce9",
     "language": "python",
-    "problem_statement": "## 背景与上下文\n\ntldextract 是一个从 URL 和域名中提取子域、注册域和公共后缀的库。在提取过程中，经常需要对域名进行预处理，例如去除尾随点、统一小写、将国际化域名（IDN）转换为 ASCII（Punycode），以及校验域名是否符合 DNS 主机名规则。目前项目还缺少一个独立的、可复用的域名处理工具模块。本题目要求新增一个纯逻辑模块，提供域名的规范化、拆分和有效性检查，以辅助后续的域名提取和分析。\n\n## 需要实现的功能\n\n在 `tldextract/domain_utils.py` 中实现三个公开函数：\n\n- `normalize_domain(domain: str) -> str`\n- `split_domain(domain: str) -> list[str]`\n- `is_valid_domain(domain: str) -> bool`\n\n该模块不进行任何网络请求、文件读写、随机数、时间获取或其他 I/O 操作，仅对传入的字符串进行纯内存处理。实现时只能使用 Python 标准库和项目已有的 `idna` 依赖。\n\n## 输入\n\n- `normalize_domain(domain: str)`：`domain` 是一个可能包含 Unicode 字符和尾随点的域名字符串。如果传入的不是字符串，应抛出 `TypeError`。\n- `split_domain(domain: str)`：`domain` 是一个域名字符串，可以为空或包含任意字符。如果传入的不是字符串，应抛出 `TypeError`。\n- `is_valid_domain(domain: str)`：`domain` 是一个域名字符串，可以为空或包含任意字符。如果传入的不是字符串，应抛出 `TypeError`（内部调用的 `normalize_domain` 会抛出该异常）。\n\n## 输出\n\n- `normalize_domain` 返回规范化后的 ASCII 小写域名，且不包含任何尾随点。如果输入是空字符串或仅由点组成（例如 `\"\"`、`\".\"`、`\"...\"`），则返回空字符串 `\"\"`。如果输入包含无法通过 IDNA 编码的非法字符（例如空字符 `\\u0000`），则抛出 `ValueError`。\n- `split_domain` 返回一个字符串列表，表示域名拆分后的标签。如果规范化后的域名为空字符串，则返回空列表 `[]`；否则返回按 `.` 拆分后的列表。该列表可能包含空字符串，例如当域名中存在连续点（`\"example..com\"`）或开头点（`\".example.com\"`）时。`split_domain` 不做有效性检查，也不过滤空标签。\n- `is_valid_domain` 返回布尔值 `True` 或 `False`。如果域名有效，返回 `True`；否则返回 `False`。对于 `normalize_domain` 抛出的 `ValueError`，`is_valid_domain` 会捕获并返回 `False`；但不会捕获 `TypeError`，因此非字符串输入会传播 `TypeError`。\n\n## 预期行为\n\n1. **尾随点处理**：`normalize_domain(\"example.com.\")` 返回 `\"example.com\"`；多个尾随点如 `\"example.com...\"` 也会被全部去除。\n2. **空输入处理**：`normalize_domain(\"\")` 返回 `\"\"`；`normalize_domain(\"...\")` 返回 `\"\"`；`split_domain(\"\")` 返回 `[]`；`is_valid_domain(\"\")` 返回 `False`；`is_valid_domain(\".\")` 返回 `False`。\n3. **大小写归一化**：`normalize_domain(\"WWW.Example.COM\")` 返回 `\"www.example.com\"`。\n4. **IDN 转换**：`normalize_domain(\"bücher.example\")` 返回 `\"xn--bcher-kva.example\"`；`is_valid_domain(\"bücher.example\")` 返回 `True`。\n5. **非法字符处理**：`normalize_domain` 对包含无法 IDNA 编码的字符（如空字符 `\\u0000`）的域名抛出 `ValueError`；`is_valid_domain` 捕获该异常并返回 `False`。\n6. **域名拆分**：`split_domain(\"www.example.com\")` 返回 `[\"www\", \"example\", \"com\"]`；`split_domain(\"example.com.\")` 返回 `[\"example\", \"com\"]`；`split_domain(\".example.com\")` 返回 `[\"\", \"example\", \"com\"]`；`split_domain(\"example..com\")` 返回 `[\"example\", \"\", \"com\"]`。\n7. **有效域名判断**：以下域名应返回 `True`：`\"example.com\"`、`\"localhost\"`、`\"foo-bar.example.com\"`。\n8. **无效域名判断**：以下域名应返回 `False`：空字符串、仅由点组成的字符串、以连字符开头或结尾的标签（如 `\"-example.com\"`、`\"example.com-\"`）、包含连续点（`\"example..com\"`）、包含下划线（`\"exa_mple.com\"`）、标签长度超过 63 个字符或整体长度超过 253 个字符、标签包含非法字符（如空格）。其中，连续点和下划线等非法字符在 `normalize_domain` 后仍保留，后续校验会返回 `False`。\n9. **类型错误**：`normalize_domain`、`split_domain`、`is_valid_domain` 对非字符串输入（如 `None`、整数）会抛出 `TypeError`。\n\n## 约束条件\n\n- 新模块路径必须为 `tldextract/domain_utils.py`，不得修改项目任何现有文件。\n- 不得修改任何测试文件。\n- 不得引入新的第三方依赖；只能使用 Python 标准库和项目已有依赖 `idna`。\n- 代码必须为纯逻辑，不得包含网络请求、文件读写、随机数、时间获取、子进程等副作用。",
+    "problem_statement": "## 背景与上下文\n\ntldextract 是一个用于从 URL 或域名中提取子域、域和公共后缀的 Python 库。在处理国际化域名（IDN）时，需要将 Unicode 域名转换为 ASCII 兼容编码（即 IDNA 编码，俗称 punycode），或者将 punycode 编码的域名解码回人类可读的 Unicode 形式。当前项目缺少一个独立、可复用的 IDNA 编码/解码工具模块，本功能旨在填补这一空白。\n\n## 需要实现的功能\n\n新增一个模块 `tldextract/idna_utils.py`，提供两个公开函数：\n- `to_ascii(hostname: str) -> str`：将可能包含 Unicode 字符的域名（主机名）转换为 ASCII 的 IDNA 编码形式。\n- `to_unicode(hostname: str) -> str`：将 ASCII 的 IDNA 编码域名解码为 Unicode 形式。\n\n两个函数在转换前都需要对输入进行规范化处理：去除首尾空白字符、去除末尾的所有点、将整个字符串转换为小写形式。处理后若字符串为空，则直接返回空字符串。转换过程中使用项目已依赖的 `idna` 库，并负责将 `idna.IDNAError` 异常转换为 `ValueError`。\n\n## 输入\n\n### `to_ascii(hostname: str)`\n- `hostname`：字符串，可能包含 Unicode 字符的域名，例如 `\"münich.com\"`。可以包含首尾空白、尾部点、大写字母。也允许为空字符串或仅包含空白和点。\n\n### `to_unicode(hostname: str)`\n- `hostname`：字符串，预期为 ASCII 编码的域名，可能包含 punycode 标签，例如 `\"xn--mnich-kva.com\"`。同样可以包含首尾空白、尾部点、大写字母（大写字母仅影响 ASCII 部分）。也允许为空字符串或仅包含空白和点。\n\n## 输出\n\n### `to_ascii`\n- 返回 `str`：纯 ASCII 的 IDNA 编码域名，不包含尾部点。例如 `\"münich.com\"` 应返回 `\"xn--mnich-kva.com\"`。\n- 如果规范化后的输入为空字符串，返回空字符串 `\"\"`。\n- 如果输入不是有效的域名（如包含空格、非法 Unicode 字符、标签长度超限等），抛出 `ValueError`。\n\n### `to_unicode`\n- 返回 `str`：Unicode 域名，不包含尾部点。例如 `\"xn--mnich-kva.com\"` 应返回 `\"münich.com\"`。\n- 如果规范化后的输入为空字符串，返回空字符串 `\"\"`。\n- 如果输入不是有效的 IDNA 域名（如包含无效 punycode 标签、非法字符等），抛出 `ValueError`。\n\n## 预期行为\n\n1. **规范化处理**：两个函数在调用 IDNA 处理前，必须对输入执行以下步骤（顺序可以不同但结果应一致）：\n   - 去除字符串首尾的所有空白字符（使用 `str.strip()`）。\n   - 去除字符串末尾的所有点（使用 `str.rstrip('.')`）。\n   - 将字符串中的所有字符转换为小写（使用 `str.lower()`）。\n2. **空输入处理**：如果规范化后的字符串为空，直接返回空字符串 `\"\"`，不调用 `idna` 库。\n3. **`to_ascii` 正常转换**：对于有效的 Unicode 域名，返回其对应的 ASCII IDNA 编码字符串。编码必须使用 IDNA 2008 标准（由 `idna` 库实现）。例如 `\"münich.com\"` 应得到 `\"xn--mnich-kva.com\"`。对于已经是 ASCII 的域名（如 `\"example.com\"`），返回原样（但已小写且无尾点）。\n4. **`to_ascii` 错误处理**：如果 `idna.encode()` 抛出 `idna.IDNAError`（或其子类），将其捕获并重新抛出为 `ValueError`，原始异常作为 `__cause__`。不得让原始 `IDNAError` 泄漏到函数外。\n5. **`to_unicode` 正常转换**：对于有效的 ASCII IDNA 域名，返回对应的 Unicode 字符串。例如 `\"xn--mnich-kva.com\"` 应得到 `\"münich.com\"`。对于不包含 punycode 的 ASCII 域名（如 `\"example.com\"`），返回原样（已小写且无尾点）。\n6. **`to_unicode` 错误处理**：如果 `idna.decode()` 抛出 `idna.IDNAError`（或其子类），将其捕获并重新抛出为 `ValueError`，原始异常作为 `__cause__`。不得让原始 `IDNAError` 泄漏到函数外。\n7. **边界情况**：\n   - 输入 `\"\"`、`\"   \"`、`\".\"` 均视为空输入，返回 `\"\"`。\n   - 输入包含多个尾点（如 `\"example.com..\"`）时，去除所有尾点后处理。\n   - 输入包含大写 Unicode 字符（如 `\"MÜNICH.COM\"`）时，应先转换为小写再编码，确保结果正确。\n   - 输入包含无效字符（如空格、表情符号）时，应抛出 `ValueError`。\n\n## 约束条件\n\n- 新模块路径必须为 `tldextract/idna_utils.py`，不得修改项目中的任何现有文件。\n- 不得引入新的第三方依赖，只允许使用 Python 标准库和项目已依赖的 `idna` 库。\n- 函数签名必须与题目描述完全一致，不得修改参数名、类型注解或返回值类型。\n- 禁止在网络、文件系统、子进程、随机数、当前时间等有副作用的场景中使用本模块。\n- 不得在实现中使用 `NotImplementedError`（骨架代码除外）。",
     "hints": null,
     "modified_files": [
-      "tldextract/domain_utils.py"
+      "tldextract/idna_utils.py"
     ],
     "do_not_modify": [
-      "tests/test_domain_utils_synth.py"
+      "tests/test_idna_utils_synth.py"
     ],
     "test_cmd": "pytest tests/ -q",
     "FAIL_TO_PASS": [
-      "tests/test_domain_utils_synth.py::test_is_valid_domain_idna",
-      "tests/test_domain_utils_synth.py::test_is_valid_domain_invalid",
-      "tests/test_domain_utils_synth.py::test_is_valid_domain_valid",
-      "tests/test_domain_utils_synth.py::test_normalize_domain_empty_and_dots",
-      "tests/test_domain_utils_synth.py::test_normalize_domain_idna",
-      "tests/test_domain_utils_synth.py::test_normalize_domain_invalid_unicode",
-      "tests/test_domain_utils_synth.py::test_normalize_domain_lowercase_no_trailing_dot"
+      "tests/test_idna_utils_synth.py::test_to_ascii_ascii_domain_unchanged",
+      "tests/test_idna_utils_synth.py::test_to_ascii_empty_hostname",
+      "tests/test_idna_utils_synth.py::test_to_ascii_invalid_characters",
+      "tests/test_idna_utils_synth.py::test_to_ascii_strips_trailing_dot_and_lowercases",
+      "tests/test_idna_utils_synth.py::test_to_ascii_unicode_domain",
+      "tests/test_idna_utils_synth.py::test_to_unicode_ascii_domain_unchanged",
+      "tests/test_idna_utils_synth.py::test_to_unicode_punycode_domain",
+      "tests/test_idna_utils_synth.py::test_to_unicode_strips_trailing_dot_and_lowercases"
     ],
     "PASS_TO_PASS": [],
-    "image": "ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/swe-synth-0009:v1",
-    "solution_image": "ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/swe-synth-0009:v1-sol",
+    "image": "ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/swe-synth-0022:v1",
+    "solution_image": "ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/swe-synth-0022:v1-sol",
     "verify_script": "/task/verify.sh",
     "generated_by": {
       "model": "deepseek-v4-pro-202606",
       "agent": "agent1",
-      "ts": "2026-08-21T20:57:10.513745+00:00",
+      "ts": "2026-08-22T16:44:21.919710+00:00",
       "prompt_version": "module-v1",
-      "input_tokens": 414303,
-      "output_tokens": 1918570
+      "input_tokens": 457790,
+      "output_tokens": 1887094
     },
     "validation": {
       "local_sanity_passed": true,
-      "local_duration_sec": 12.32383418083191,
+      "local_duration_sec": 16.76568579673767,
       "sandbox_tool": "swe-synth-shared-runner",
-      "sandbox_instance_id": "ohmiiubknqpposcgznyt3mqsu4rwctqtgohauab4",
+      "sandbox_instance_id": "emevyqr3tsrkf66jkojww2r3z3uuhddfizcqbksg",
       "empty_solution_result": "fail",
       "golden_solution_result": "pass",
       "deterministic": true,
-      "duration_sec": 26.6,
+      "duration_sec": 81.5,
       "llm_attempt": {
         "solvable": true,
         "reason": "题干准确：LLM 第 2 次尝试即依据题干完成任务并通过全部判据",
@@ -439,29 +289,29 @@
           {
             "attempt": 1,
             "passed": false,
-            "f2p": "6/7",
+            "f2p": "4/8",
             "p2p": "0/0",
-            "error": "AssertionError: assert 'WWW.Example.COM' == 'www.example.com'"
+            "error": "TypeError: encode() got an unexpected keyword argument 'output'"
           },
           {
             "attempt": 2,
             "passed": true,
-            "f2p": "7/7",
+            "f2p": "8/8",
             "p2p": "0/0",
             "error": null
           }
         ]
       },
-      "proof_dir": "/root/swe_synth/data/proofs/swe-synth-0009"
+      "proof_dir": "/root/swe_synth/data/proofs/swe-synth-0022"
     },
     "overlap_check": {
       "passed": true,
       "method": "github_search+bm25+embedding+llm_judge",
       "queried": [
         "py",
-        "domain_utils",
-        "normalize_domain",
-        "is_valid_domain"
+        "idna_utils",
+        "NotImplementedError",
+        "to_unicode"
       ],
       "top_candidates": [],
       "target_file_last_modified": null,
