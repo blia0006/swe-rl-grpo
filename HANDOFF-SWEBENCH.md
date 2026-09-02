@@ -3,7 +3,10 @@
 > **本文档用途**：作为新项目的启动依据。旧仓库（合成题版本）保留为备份，已完整交付、
 > 可独立答辩，**不要删除**。新项目是"用官方题库重做一遍"，不是修 bug。
 >
-> **旧仓库**：`https://github.com/blia0006/swe-rl-grpo`（最新 `75249b3`，7 项验收 5 项达成）
+> **旧仓库**：`https://github.com/blia0006/swe-rl-grpo`（7 项验收 5 项达成，交付物已全部入库）
+>
+> **GPU 环境**：TKE 节点与 Pod `swe-rl-gpu` **保留运行、可直接复用**，
+> 驱动/训练框架/模型权重/凭证全部就绪，详见 §6.5。
 
 ---
 
@@ -271,17 +274,78 @@ ray stop; sleep 8; pkill -f "ray::"; sleep 3; rm -f /dev/shm/nccl-*
 
 ---
 
+## 6.5 现有环境：GPU 节点保留，直接复用（不要重建）
+
+旧项目的 TKE GPU 节点与 Pod **保持运行、不删除**，新项目直接在上面继续做。
+这意味着以下环节**全部可以跳过**：
+
+| 已就绪 | 位置 / 说明 |
+|---|---|
+| GPU 节点 | RTX 5090 ×1，TKE 集群（北京六区），驱动 `nvidia-driver-570-open` 已装并 reboot 生效 |
+| Pod | `swe-rl-gpu`（namespace `default`），镜像 `verlai/verl:vllm011.latest`（cu128） |
+| 训练框架 | verl 0.6.1 + vLLM 0.11.0 + torch 2.8.0，**已跑通 55 步，配置全部调正** |
+| 模型权重 | `/workspace/model/Qwen2.5-Coder-1.5B-Instruct` |
+| 代码 | `/home/dpsk_a2a/repo`（旧仓库 clone） |
+| 凭证 | `/home/dpsk_a2a/repo/.env`（TENCENTCLOUD / TCR / COS 全套） |
+| 额外装好的包 | `matplotlib`、`peft`、`cos-python-sdk-v5` |
+| 旧交付物 | `docs/`、`results/`、`train_final_55steps.log`（已入 git，可放心覆盖） |
+
+**进入方式**：TKE 控制台 → 集群 → Pod `swe-rl-gpu` → 容器 `main` → OrcaTerm。
+
+### 复用时的三条注意事项
+
+**1. 新项目代码建议另开目录，不要覆盖旧仓库**
+
+```bash
+# 保留 /home/dpsk_a2a/repo 作为对照基线
+mkdir -p /home/dpsk_a2a/repo-swebench
+```
+
+旧仓库里有已验证可用的模块，新项目改坏了随时能回去参照。
+
+**2. Pod 无法访问 github.com（已实测）**
+
+新项目代码同样要经 COS 摆渡进来，或用 `kubectl cp` 上传。
+参考 `scripts/ship_deliverables_via_cos.py`。
+
+**3. 每次训练前务必确认环境干净**
+
+```bash
+# 检查残留（Ray 进程 / shm / 显存）
+pgrep -af "ray::|raylet|main_ppo" | head
+df -h /dev/shm | tail -1
+nvidia-smi --query-gpu=memory.used --format=csv,noheader
+```
+
+三者应分别为：无输出、`0 used`、约 34 MiB。有残留则按 §5.4 清理。
+
+### 计费提醒
+
+节点保留意味着**持续按量计费**。新项目告一段落后，记得：
+
+```bash
+python3 scripts/manage_gpu_nodepool.py --delete
+```
+
+或 TKE 控制台 → 节点池 → `gpu-5090-pool` → 删除。
+
+---
+
 ## 7. 新项目第一天的行动清单
 
 ```
-□ 1. 从旧仓库拷贝可复用模块（§1 那张表）
-□ 2. Phase 0 门禁 1：本地 docker pull 一个官方 SWE-bench 镜像 —— 成功才继续
-□ 3. Phase 0 门禁 2：push 到 TCR
-□ 4. Phase 0 门禁 3：AGS 沙箱用该镜像起实例
+□ 0. 确认 GPU 节点仍在运行（§6.5），环境无需重建
+□ 1. 从旧仓库拷贝可复用模块（§1 那张表）到新目录
+□ 2. Phase 0 门禁 1：本地 Mac 上 docker pull 一个官方 SWE-bench 镜像 —— 成功才继续
+□ 3. Phase 0 门禁 2：push 到 TCR（ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/）
+□ 4. Phase 0 门禁 3：AGS 沙箱用该镜像起实例（clients/ags.py 的 image_override）
 □ 5. Phase 0 门禁 4：沙箱内跑通 pytest，确认 F2P/P2P 测试可执行
 □ 6. 四个门禁全过 → 写 PROGRESS.md 记录，进入 Phase 1
 □ 7. 任一门禁失败 → 记录失败原因，评估是否继续（旧仓库可保底）
 ```
+
+**门禁 1~2 在本地 Mac 做**（Pod 访问不了 Docker Hub，本地可以）；
+**门禁 3~4 在 Pod / 沙箱做**。两边分工别搞混。
 
 ---
 
