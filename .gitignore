@@ -20,6 +20,9 @@ checkpoints/
 outputs/
 wandb/
 *.log
+# 但最终交付的训练日志必须入库：它是 reward 曲线（验收第 4 条）与
+# §7.2 patch 质量统计的原始证据，评审需要能核对图表来源
+!train_final_55steps.log
 
 # 本地模型权重缓存（ModelScope 下载，已上传 COS，不入库）
 .model_cache/
