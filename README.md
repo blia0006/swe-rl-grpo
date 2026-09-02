@@ -5,6 +5,52 @@
 
 ---
 
+## 0. 核心结果速览
+
+### 训练曲线（55 step，RTX 5090 单卡）
+
+![reward 与 grad_norm 曲线](docs/reward_curve.png)
+
+**上图 reward**：蓝色为逐步原始值，红色为 11 步滑动平均，绿色虚线为每步 8 个采样中的最高分。
+绿线三个尖峰（0.43 / 0.42 / **1.0**）是真正拿到测试分的样本，其中 **1.0 表示该采样把
+F2P 测试全部修绿且无 P2P 回归**。
+
+**下图 grad_norm（对数轴）**：绝大多数步稳定在 $10^{-1}$ 量级，但有 8~9 步骤降至
+$10^{-5}\sim10^{-6}$ —— 那正是"一组 8 个采样 reward 全为 0 → GRPO 组内 advantage 归零
+→ 梯度消失"的时刻。**这张图直观展示了 GRPO 在稀疏奖励下的失效机制**，也说明本方案的
+reward shaping 把此前"全程 $10^{-6}$"的死循环改善为"偶发掉落"。
+
+### 关键指标
+
+| 项 | 结果 |
+|---|---|
+| 训练步数 | **55 / 55**，全程 0 报错 |
+| `grad_norm` | **55/55 步 > 1e-8**（前两轮训练恒为 0，死循环已打破） |
+| 采样总数 | 55 × 8 = 440 |
+| patch 可应用 | 152 / 440 = **34.5%** |
+| 最高单步 reward | **1.0** |
+| tracing 产出 | 14 题，每条 4~10 步 |
+
+### 交付物索引
+
+| 文件 | 内容 |
+|---|---|
+| [`docs/reward_curve.png`](docs/reward_curve.png) | 训练曲线（验收第 4 条） |
+| [`docs/reward_curve.csv`](docs/reward_curve.csv) | 55 步全量指标 |
+| [`results/comparison.md`](results/comparison.md) | 训练前后 pass@1 · 严格口径 |
+| [`results/comparison_lenient.md`](results/comparison_lenient.md) | 训练前后 pass@1 · 高灵敏度口径（32 采样） |
+| [`data/lineA_tracing.jsonl`](data/lineA_tracing.jsonl) | 线 A tracing（验收第 1、2 条） |
+| [`train_final_55steps.log`](train_final_55steps.log) | 训练原始日志（图表与统计的证据来源） |
+
+### 两项未达成的验收标准（已如实标注，未作粉饰）
+
+- **第 4 条 reward 曲线上升** —— 实际呈 U 型（峰 0.0880 → 谷 0.0455 → 末 0.0841），
+  根因定量分析见 **§7.3**
+- **第 6 条 pass@1 提升** —— 有完整对比数据，但差异经 Welch t 检验（$t=-0.22$）
+  **不显著**，属噪声范围，见 **§7.4**
+
+---
+
 ## 1. 架构
 
 ```
@@ -292,8 +338,13 @@ P2P 防作弊规则完整保留，`0.2` 只是让"写出合法 diff"这一中间
 **核心结论：摆脱了 `grad_norm=0` 死循环。** 前两轮训练 `grad_norm` 恒为 0、参数完全没更新；
 本轮全程非 0，说明梯度信号真实存在、GRPO 组内 advantage 非零。
 
-reward 曲线见 `docs/reward_curve.png`（`scripts/plot_reward_curve.py` 从训练日志生成；
-`trainer.logger=["console"]`，未接 wandb 以避免训练机出网依赖）。
+![reward 与 grad_norm 曲线](docs/reward_curve.png)
+
+由 `scripts/plot_reward_curve.py` 从训练日志生成（`trainer.logger=["console"]`，
+未接 wandb 以避免训练机出网依赖；原始日志 `train_final_55steps.log` 一并入库供核对）。
+
+**为什么必须画滑动平均**：本课题 `train_batch_size=1`，每 step 只跑一道题（11 题循环 5 轮），
+单步 reward 的方差主要来自"这步抽到哪道题"而非策略变化，原始曲线呈锯齿状无法反映趋势。
 
 ### 7.2 patch 质量的定量分析
 
