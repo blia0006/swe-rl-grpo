@@ -13,7 +13,7 @@ golden.patch 内容**从沙箱内部读取**（`/opt/solution/golden.patch`，�
 过期问题），用沙箱内部文件才能保证测的是当前镜像的真实标准答案。
 
 用法：
-    cd /Users/user/学习/题目四：强化学习
+    cd <repo_root>
     source .venv/bin/activate
     AGS_REWARD_TOOL_NAME=swe-synth-shared-runner python3 experiments/regression_reward_fn.py
 """

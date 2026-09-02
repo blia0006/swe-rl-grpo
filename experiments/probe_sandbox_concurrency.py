@@ -23,7 +23,7 @@
   不能依赖调用是否抛异常。
 
 用法：
-    cd /Users/user/学习/题目四：强化学习
+    cd <repo_root>
     source .venv/bin/activate
     python3 experiments/probe_sandbox_concurrency.py
 """

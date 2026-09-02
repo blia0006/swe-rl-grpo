@@ -3,7 +3,7 @@
 见 plan.md 2.4 节 / Phase 1.5 checklist）。
 
 用法：
-    cd /Users/user/学习/题目四：强化学习
+    cd <repo_root>
     source .venv/bin/activate
     python3 experiments/upload_model_to_cos.py
 """
@@ -35,7 +35,7 @@ def main() -> int:
     load_env()
     from clients.cos import upload_file, list_objects
 
-    bucket = os.environ.get("COS_BUCKET", "COS_BUCKET")
+    bucket = os.environ.get("COS_BUCKET", "YOUR_COS_BUCKET")
 
     if not MODEL_LOCAL_DIR.exists():
         print(f"[FATAL] 找不到本地模型目录 {MODEL_LOCAL_DIR}，请先用 ModelScope 下载")

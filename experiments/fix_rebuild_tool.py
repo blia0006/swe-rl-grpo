@@ -61,8 +61,11 @@ def main() -> int:
     time.sleep(8)
 
     print("\n=== 第二步：重新创建干净的共享工具 ===")
-    # 占位镜像随便用一个已知正确的
-    placeholder_image = "ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/swe-synth-0016:v1"
+    # 占位镜像随便用一个已知正确的（从环境变量读取，避免硬编码 TCR 命名空间）
+    placeholder_image = os.environ.get(
+        "PLACEHOLDER_IMAGE",
+        "ccr.ccs.tencentyun.com/<tcr-namespace>/swe-synth-0016:v1",
+    )
     tool_id = ags.create_tool(TOOL_NAME, placeholder_image, description="swe-rl reward runner (rebuilt)")
     print("新 tool_id:", tool_id)
     ags.wait_tool_active(TOOL_NAME, timeout=180)

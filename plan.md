@@ -36,7 +36,7 @@
 | 题目元数据 + golden patch（2026-08-23 复核：29 道，原 `dist/` 快照目录已被课题三重构移除，
 现直接读实时数据） | `课题三-数据合成/data/tasks.jsonl` | 本课题的 SWE 数据集，覆盖验收标准"≥10 题"；
 题目内容/质量不在本课题关注范围内，只借用其"沙箱可跑、可判分"的基础设施 |
-| 题目镜像（TCR，`swe-synth-000X:v1` / `:v1-sol`） | TCR 个人版 `ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/` | 每题的隔离 repo + 依赖 + 测试环境，直接注册为 AGS 沙箱工具 |
+| 题目镜像（TCR，`swe-synth-000X:v1` / `:v1-sol`） | TCR 个人版 `ccr.ccs.tencentyun.com/<tcr-namespace>/` | 每题的隔离 repo + 依赖 + 测试环境，直接注册为 AGS 沙箱工具 |
 | `verify.sh` 判据契约 | 每题镜像内 | 直接作为本课题的 reward 计算器（FAIL_TO_PASS / PASS_TO_PASS） |
 | AGS SDK 封装 | `课题三-数据合成/swe_synth/clients/ags.py` | 沙箱创建/执行命令/销毁的调用代码，直接复用/精简 |
 | 云资源探测脚本 | `课题三-数据合成/scripts/probe_cloud.py` | Phase 0 直接跑，探 AGS 沙箱工具配额、TKE 权限、TCR 现状 |
@@ -52,8 +52,8 @@
 
 | 预留资源 | 地域 | 现状 | 决策 |
 |---|---|---|---|
-| TKE 集群 `swe-rl-cluster`（`CLUSTER_ID`） | **ap-shanghai** | Running，0 节点、0 节点池（空壳） | **直接复用**，Phase 3 只需新建一个 GPU 节点池，不用重新申请集群 |
-| COS bucket `COS_BUCKET` | **ap-shanghai** | 已存在，创建于 2026-07-08 | **直接复用**作为 tracing.jsonl 的传递通道，无需新建 bucket |
+| TKE 集群 `swe-rl-cluster`（`<cluster-id>`） | **ap-shanghai** | Running，0 节点、0 节点池（空壳） | **直接复用**，Phase 3 只需新建一个 GPU 节点池，不用重新申请集群 |
+| COS bucket `<cos-bucket>` | **ap-shanghai** | 已存在，创建于 2026-07-08 | **直接复用**作为 tracing.jsonl 的传递通道，无需新建 bucket |
 
 **架构更新（2026-08-23 复核，好消息）**：课题三已把 AGS SandBox 的地域从 ap-guangzhou
 迁移到了 **ap-shanghai**（`.env` 里 `E2B_DOMAIN=ap-shanghai.tencentags.com`，AGS 管理面
@@ -108,7 +108,7 @@
 │  │    收尾：bash /task/verify.sh → 解析 F2P/P2P → final_reward           │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                            │
-│  driver 汇总所有 episode → 上传 COS COS_BUCKET（ap-shanghai） │
+│  driver 汇总所有 episode → 上传 COS <cos-bucket>（ap-shanghai） │
 └──────────────────────────────────┬─────────────────────────────────────────┘
                                    │ tracing.jsonl（交付物）
 ┌──────────────────────────────────▼─────────────────────────────────────────┐
@@ -350,7 +350,7 @@ VERL 内部会把它填到 `token_level_rewards` 的最后一个有效 token 上
 - [x] 跑 `scripts/probe_cloud.py`（题目四扩展版，加了 tke/cfs/cos/gpu 探测项），结论见 1.1 节：
   - AGS 沙箱工具配额：8/10 已用，剩 2 个，团队共享会动态变化，Phase 2 前需重新探测
   - TKE：发现预留空集群 `swe-rl-cluster`（ap-shanghai），直接复用，只建 GPU 节点池
-  - COS：发现预留 bucket `COS_BUCKET`（ap-shanghai），直接复用
+  - COS：发现预留 bucket `<cos-bucket>`（ap-shanghai），直接复用
   - CFS：无预留资源，决策不用，简化为纯 COS 传递
   - 权限：`AdministratorAccess`，无阻塞
 - [x] Phase 3 前：核实 ap-shanghai 可售 GPU 机型具体芯片型号与单价（`InquiryPriceRunInstances`
@@ -461,7 +461,7 @@ VERL 内部会把它填到 `token_level_rewards` 的最后一个有效 token 上
       （实例池的还原逻辑由 git 方案改为 tar 快照方案，并修复了异常处理）
 - [x] **模型权重预取**：经 **ModelScope**（国内直连，本机实测下载 2.88GB 权重耗时 ~6 分钟）下
       `Qwen2.5-Coder-1.5B-Instruct`（10 个文件：`model.safetensors`+tokenizer+config），已上传到
-      COS `COS_BUCKET/models/Qwen2.5-Coder-1.5B-Instruct/`，10 个文件全部核对
+      COS `<cos-bucket>/models/Qwen2.5-Coder-1.5B-Instruct/`，10 个文件全部核对
       成功。Phase 3 直接从 COS 拉取到 GPU 节点，⚠️ 不在 GPU 节点上直连 HuggingFace 拉权重
 - [ ] **VERL 镜像预取**：把 VERL 官方镜像（预装 torch/vllm/flash-attn）同步到自有 CCR，
       TKE 内网拉取。⚠️ 绝不在 GPU 节点上 `pip install verl vllm torch`。
@@ -566,6 +566,6 @@ VERL 内部会把它填到 `token_level_rewards` 的最后一个有效 token 上
 | ≥1 轮完整闭环 | Phase 2 采集 → COS → Phase 3 训练 → Phase 4 回沙箱评估 | 设计就绪 |
 | 训练前后 pass@1 对比 | Phase 3 开头跑 baseline、Phase 4 跑训练后，5 题评测集不参与训练 | 设计就绪 |
 | README（环境构建/部署步骤/选型理由/超参/结果分析） | Phase 5 | 待产出 |
-| 技术要求：SandBox→TKE 经 COS/CFS 传 tracing | 线 A 上传 COS `COS_BUCKET` | 设计就绪 |
+| 技术要求：SandBox→TKE 经 COS/CFS 传 tracing | 线 A 上传 COS `<cos-bucket>` | 设计就绪 |
 | 技术要求：VERL ≥0.3.0 + GRPO/PPO | 官方镜像锁版本，算法用 GRPO（免 critic，省显存） | 设计就绪 |
 | 技术要求：reward = fail→pass 数 / 相关测试数 | 复用课题三 `verify.sh` 的 F2P/P2P 输出（3.2 节公式） | 设计就绪 |

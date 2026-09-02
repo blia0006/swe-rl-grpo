@@ -194,7 +194,7 @@ python3 scripts/pod_download_model.py
 | 集群 | TKE 标准集群（北京六区） |
 | GPU 节点 | RTX 5090 ×1（24GB, Blackwell sm_120），Ubuntu 22.04 |
 | API Server | 仅开内网访问，公网访问关闭 |
-| 安全组 | 自定义，仅放通 `VPC_CIDR` |
+| 安全组 | 自定义，仅放通 VPC 内网网段 |
 | 出网 | NAT 网关（节点无公网 IP，仅单向出网拉镜像/依赖） |
 
 ### 4.2 GPU 驱动

@@ -9,9 +9,9 @@
 
 **已完成：**
 - 通读题目四原始需求（含两张截图内容），整理为 `TASK-SPEC.md`
-- 探查课题三（`/Users/user/学习/课题三-数据合成/`）已有资产，确认可复用：
+- 探查课题三（`课题三-数据合成/`）已有资产，确认可复用：
   - `dist/swe-synth-delivery-20260821/data/tasks.jsonl`：19 道 ACCEPTED 题目，每题含镜像地址
-    （TCR 个人版 `ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/swe-synth-000X:v1` /
+    （TCR 个人版 `ccr.ccs.tencentyun.com/<tcr-namespace>/swe-synth-000X:v1` /
     `:v1-sol`）、golden patch、`verify.sh` 判据契约
   - `swe_synth/clients/ags.py`：AGS 沙箱 SDK 封装（创建实例/执行命令/销毁）
   - `scripts/probe_cloud.py`：云资源只读探测脚本，可直接复用探测 AGS/TCR/TKE 相关权限
@@ -40,7 +40,7 @@
 
 **做了什么：**
 - 在课题三 `scripts/probe_cloud.py` 基础上扩展出题目四专用版本
-  `/Users/user/学习/题目四：强化学习/scripts/probe_cloud.py`，新增 TKE / CFS / COS / GPU 库存
+  `题目四：强化学习/scripts/probe_cloud.py`，新增 TKE / CFS / COS / GPU 库存
   探测（原脚本只有 cam/tcr/ags/tokenhub），复用课题三 `.env` 凭证（本目录若无 `.env` 会自动回退读取
   `../课题三-数据合成/.env`，同账号无需重复配置）
 - 分别在 `ap-guangzhou`（课题三 SandBox 所在地域）和 `ap-shanghai` 跑了全量探测
@@ -52,13 +52,13 @@
    时预期的更紧张 —— 说明配额是全团队实时共享的，不能假设课题三清理后余量会一直保留。
    → Phase 2 必须每次注册前重新探测剩余配额，严格"用一个、删一个"串行执行。
 
-2. **TKE（重大发现）**：ap-shanghai 存在一个空壳集群 **`swe-rl-cluster`（`CLUSTER_ID`）**，
+2. **TKE（重大发现）**：ap-shanghai 存在一个空壳集群 **`swe-rl-cluster`（`<cluster-id>`）**，
    状态 Running，0 节点、0 节点池，创建于本课题需求下发前后，**命名与课题精确匹配**，
    判断为课题组已预先建好留给我们用。→ **直接复用该集群，Phase 3 只需新建 GPU 节点池**，
    不用再走"新建集群"的审批流程，大幅节省时间。
    （ap-guangzhou 另有 6 个集群，均为同事个人项目命名如"郑宗恒-test"，与本课题无关，不使用）
 
-3. **COS（重大发现）**：ap-shanghai 存在 bucket **`COS_BUCKET`**，创建于
+3. **COS（重大发现）**：ap-shanghai 存在 bucket **`<cos-bucket>`**，创建于
    2026-07-08（早于本次任务启动），命名精确匹配"swe + rl + tracing"，判断为课题组预先建好的
    tracing 传递通道。→ **直接复用，Phase 2/3 的 tracing.jsonl 上传/下载都用这个 bucket，不新建**。
 
@@ -317,7 +317,7 @@ demo 服务本身不稳定），与沙箱网络能力无关。换成 `api.github
 1. **好消息：沙箱地域迁移，跨地域架构不再需要**
    - 课题三 `.env` 里 `E2B_DOMAIN`（数据面，沙箱连接）和 `TENCENTCLOUD_REGION`（管理面，
      建工具/起实例）都已从 `ap-guangzhou` 改成 **`ap-shanghai`**，与预留的 TKE 集群
-     `swe-rl-cluster`、COS bucket `COS_BUCKET` 同地域
+     `swe-rl-cluster`、COS bucket `<cos-bucket>` 同地域
    - 用 `AGSClient().list_tools()` 做了一次只读连通性实测（不产生费用），在 ap-shanghai
      成功返回 11 个已有沙箱工具（含课题三自己的 `swe-synth-shared-runner`，ACTIVE 状态），
      确认管理面 API 连通正常
@@ -331,7 +331,7 @@ demo 服务本身不稳定），与沙箱网络能力无关。换成 `api.github
      尤其是 `start_instance` 的"一个工具、多题复用、实例级覆盖镜像"能省掉大量沙箱工具
      配额（题目四本来就仅剩 2 个配额的顾虑因此缓解）
    - 凭证齐全：`AGS_ROLE_ARN` / `TCR_USERNAME` / `TCR_REGISTRY_TYPE` 均已配置；
-     `TCR_REGISTRY=ccr.ccs.tencentyun.com`、`TCR_NAMESPACE=tcb-100008634787-zbaf`
+     `TCR_REGISTRY=ccr.ccs.tencentyun.com`、`TCR_NAMESPACE=<tcr-namespace>`
      与 `plan.md` 第 1 节原有假设完全一致，镜像路径不用改
 
 3. **数据源路径变化（仅路径，不涉及内容判断）**
@@ -551,7 +551,7 @@ COS、VERL 官方镜像同步到自有 CCR、核实 GPU 机型与单价）下一
 **模型权重预取**：本机新建 `.venv` 装了 `modelscope`（不装训练重依赖），用 ModelScope 国内直连
 下载 `Qwen/Qwen2.5-Coder-1.5B-Instruct`（约 2.88GB，耗时 ~6 分钟），核心文件（`model.safetensors`
 + tokenizer + config，共 10 个文件）逐个用 `clients/cos.py::upload_file` 上传到 COS
-`COS_BUCKET/models/Qwen2.5-Coder-1.5B-Instruct/`，上传后核对 `list_objects`
+`<cos-bucket>/models/Qwen2.5-Coder-1.5B-Instruct/`，上传后核对 `list_objects`
 确认 10 个文件全部到位。本地 `.model_cache/` 已加入 `.gitignore`（不入库）。
 
 **VERL 官方镜像预取：决策改为并入 Phase 3**——本机 Docker daemon 未运行，且 Mac 是 ARM64
@@ -606,7 +606,7 @@ ACTIVE），Line A（多轮 ReAct 采集）和 Line B（GRPO 训练的 reward �
 要求，vLLM 0.8.5 比最新版本（要求 CUDA≥12.8/vLLM≥0.18）更老、对 T4 这种老架构的兼容性更有
 把握，是刻意选的稳妥版本，不是随便挑的。
 
-**GPU 节点池的网络/安全组核实**（全部只读查询，零成本）：TKE 集群 `CLUSTER_ID` 所在 VPC
+**GPU 节点池的网络/安全组核实**（全部只读查询，零成本）：TKE 集群 `<cluster-id>` 所在 VPC
 （`vpc-cgagpzik`）已有 NAT 网关（AVAILABLE 状态，出网没问题），`ap-shanghai-4` 里有子网
 `subnet-97b4ftkv`（跟 GN6S.LARGE20 库存所在可用区一致），复用同 VPC 里现成在跑的安全组
 `sg-27e6wc6a`。GPU 驱动安装：TKE 节点池创建时 `InstanceAdvancedSettings.GPUArgs` 传空对象

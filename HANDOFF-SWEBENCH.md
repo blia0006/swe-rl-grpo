@@ -93,8 +93,8 @@ docker pull swebench/sweb.eval.x86_64.<instance_id>:latest
 **门禁 2：能否推到 TCR**
 
 ```bash
-docker tag <官方镜像> ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/sweb-<id>:v1
-docker push ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/sweb-<id>:v1
+docker tag <官方镜像> ccr.ccs.tencentyun.com/<tcr-namespace>/sweb-<id>:v1
+docker push ccr.ccs.tencentyun.com/<tcr-namespace>/sweb-<id>:v1
 ```
 
 **门禁 3：AGS 沙箱能否用该镜像起实例**
@@ -337,7 +337,7 @@ python3 scripts/manage_gpu_nodepool.py --delete
 □ 0. 确认 GPU 节点仍在运行（§6.5），环境无需重建
 □ 1. 从旧仓库拷贝可复用模块（§1 那张表）到新目录
 □ 2. Phase 0 门禁 1：本地 Mac 上 docker pull 一个官方 SWE-bench 镜像 —— 成功才继续
-□ 3. Phase 0 门禁 2：push 到 TCR（ccr.ccs.tencentyun.com/tcb-100008634787-zbaf/）
+□ 3. Phase 0 门禁 2：push 到 TCR（ccr.ccs.tencentyun.com/<tcr-namespace>/）
 □ 4. Phase 0 门禁 3：AGS 沙箱用该镜像起实例（clients/ags.py 的 image_override）
 □ 5. Phase 0 门禁 4：沙箱内跑通 pytest，确认 F2P/P2P 测试可执行
 □ 6. 四个门禁全过 → 写 PROGRESS.md 记录，进入 Phase 1

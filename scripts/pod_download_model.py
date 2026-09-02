@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from clients.cos import list_objects, download_file  # noqa: E402
 
-BUCKET = os.environ.get("COS_BUCKET", "COS_BUCKET")
+BUCKET = os.environ.get("COS_BUCKET", "YOUR_COS_BUCKET")
 PREFIX = "models/Qwen2.5-Coder-1.5B-Instruct/"
 LOCAL_DIR = "/workspace/model/Qwen2.5-Coder-1.5B-Instruct"
 

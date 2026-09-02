@@ -47,7 +47,7 @@
 ## 5. 本方案的关键决策（与原始要求的差异说明）
 
 1. **SWE 题目来源**：不重新从 SWE-bench/swesmith 选题构建镜像，而是**直接复用课题三已交付
-   的 19 道 ACCEPTED 题目**（`/Users/user/学习/课题三-数据合成/dist/swe-synth-delivery-20260821/data/tasks.jsonl`）。
+   的 19 道 ACCEPTED 题目**（`课题三-数据合成/dist/swe-synth-delivery-20260821/data/tasks.jsonl`）。
    这些题目本质上就是"取指定 repo 指定 commit 挖空/新增/重构 + 判据测试"的 SWE 任务，镜像已推送
    TCR、`verify.sh` 判据契约已验证可用（空解 fail、golden pass、确定性通过）。**这是本方案节省
    时间的最大来源**——无需重新选题、无需重新构建/推送镜像。

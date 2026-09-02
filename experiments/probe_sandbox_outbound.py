@@ -14,7 +14,7 @@ Agent 每一步都要用 HTTPS 调 TKE 上的 vLLM 拿下一步动作，因此�
      几分钟不退出的场景）
 
 用法：
-    cd /Users/user/学习/题目四：强化学习
+    cd <repo_root>
     source .venv/bin/activate
     python3 experiments/probe_sandbox_outbound.py
 """

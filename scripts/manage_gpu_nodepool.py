@@ -1,8 +1,10 @@
 """Phase 3：TKE GPU 节点池的创建 / 删除（只读探测已在 plan.md 记录完毕后，
-本文件是真正会花钱的一步——创建一个 `GN6S.LARGE20`（T4）节点，按量计费。
+本文件是真正会花钱的一步——创建一个 GPU 节点，按量计费。
 
 ⚠️ 使用前确认：
-  - cluster_id 固化为 `CLUSTER_ID`（ap-shanghai，本课题预留集群）
+  - 集群 / VPC / 子网 / 安全组 / 镜像等资源 ID 全部从环境变量读取，
+    在 `.env` 中配置（`TKE_CLUSTER_ID` / `TKE_VPC_ID` / `TKE_SUBNET_ID` /
+    `TKE_SECURITY_GROUP_ID` / `TKE_IMAGE_ID` / `TKE_REGION` / `TKE_ZONE`）
   - 只建 1 个节点，不开自动伸缩（EnableAutoscale=False，MinSize=MaxSize=DesiredCapacity=1）
   - 用完立刻调用 `delete` 释放，不要让它空跑
 
@@ -23,14 +25,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-CLUSTER_ID = "CLUSTER_ID"
-REGION = "ap-shanghai"
-ZONE = "ap-shanghai-4"
-VPC_ID = "vpc-cgagpzik"
-SUBNET_ID = "subnet-97b4ftkv"
-SECURITY_GROUP_ID = "sg-27e6wc6a"
+CLUSTER_ID = os.environ.get("TKE_CLUSTER_ID", "YOUR_CLUSTER_ID")
+REGION = os.environ.get("TKE_REGION", "ap-shanghai")
+ZONE = os.environ.get("TKE_ZONE", "YOUR_ZONE")
+VPC_ID = os.environ.get("TKE_VPC_ID", "YOUR_VPC_ID")
+SUBNET_ID = os.environ.get("TKE_SUBNET_ID", "YOUR_SUBNET_ID")
+SECURITY_GROUP_ID = os.environ.get("TKE_SECURITY_GROUP_ID", "YOUR_SG_ID")
 INSTANCE_TYPE = "GN6S.LARGE20"
-IMAGE_ID = "img-487zeit5"       # Ubuntu Server 22.04 LTS 64位（TKE 支持列表内）
+IMAGE_ID = os.environ.get("TKE_IMAGE_ID", "YOUR_IMAGE_ID")
 NODE_POOL_OS = "ubuntu22.04x86_64"
 NODE_POOL_NAME = "gpu-t4-pool"
 STATE_FILE = ROOT / ".gpu_nodepool_state.json"

@@ -401,7 +401,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_roll.add_argument("--instance-timeout", default="20m")
     p_roll.add_argument("--output", default=str(ROOT / "data" / "tracing.jsonl"))
     p_roll.add_argument("--upload-cos", action="store_true")
-    p_roll.add_argument("--cos-bucket", default=os.environ.get("COS_BUCKET", "COS_BUCKET"))
+    p_roll.add_argument("--cos-bucket", default=os.environ.get("COS_BUCKET", "YOUR_COS_BUCKET"))
     p_roll.add_argument("--cos-key", default=None)
     p_roll.add_argument("--mock", action="store_true", help="仅开发自测：本地目录模拟沙箱，不连真实 AGS")
     p_roll.add_argument("--mock-dir", default="/tmp/swe_rl_mock_test")
