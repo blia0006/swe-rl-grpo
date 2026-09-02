@@ -1,0 +1,69 @@
+{
+  "tag": "after",
+  "model": "/workspace/checkpoints/swe-rl-grpo/global_step_55",
+  "n_tasks": 4,
+  "k": 1,
+  "apply_mode": "strict(仅 git apply)",
+  "temperature": 0.0,
+  "pass_at_1_strict": 0.0,
+  "pass_at_1_partial": 0.0,
+  "apply_rate": 0.0,
+  "mean_reward": 0.0,
+  "mean_test_score": 0.0,
+  "total_elapsed_s": 53.6,
+  "n_errors": 0,
+  "records": [
+    {
+      "task_id": "swe-synth-0015",
+      "attempt": 0,
+      "reward": 0.0,
+      "test_score": 0.0,
+      "applied": false,
+      "strict_pass": false,
+      "partial_pass": false,
+      "elapsed_s": 13.5,
+      "solution_len": 340,
+      "reason": "patch 应用失败（模型输出的 diff 不合法）：error: patch failed: cachecontrol/caches/file_cache.py:50\nerror: cachecontrol/caches/file_cache.py: patch does not apply",
+      "error": ""
+    },
+    {
+      "task_id": "swe-synth-0020",
+      "attempt": 0,
+      "reward": 0.0,
+      "test_score": 0.0,
+      "applied": false,
+      "strict_pass": false,
+      "partial_pass": false,
+      "elapsed_s": 12.9,
+      "solution_len": 446,
+      "reason": "patch 应用失败（模型输出的 diff 不合法）：error: patch failed: src/itsdangerous/encoding.py:57\nerror: src/itsdangerous/encoding.py: patch does not apply",
+      "error": ""
+    },
+    {
+      "task_id": "swe-synth-0022",
+      "attempt": 0,
+      "reward": 0.0,
+      "test_score": 0.0,
+      "applied": false,
+      "strict_pass": false,
+      "partial_pass": false,
+      "elapsed_s": 13.8,
+      "solution_len": 723,
+      "reason": "patch 应用失败（模型输出的 diff 不合法）：error: corrupt patch at line 25",
+      "error": ""
+    },
+    {
+      "task_id": "swe-synth-0018",
+      "attempt": 0,
+      "reward": 0.0,
+      "test_score": 0.0,
+      "applied": false,
+      "strict_pass": false,
+      "partial_pass": false,
+      "elapsed_s": 13.5,
+      "solution_len": 678,
+      "reason": "patch 应用失败（模型输出的 diff 不合法）：error: corrupt patch at line 19",
+      "error": ""
+    }
+  ]
+}
